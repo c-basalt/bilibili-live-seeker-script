@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    http://tampermonkey.net/
-// @version      0.5.0
+// @version      0.5.1
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -309,6 +309,28 @@
         }
     });
 
+    window.copyPlayurl = () => {
+        const room_id = window.__NEPTUNE_IS_MY_WAIFU__.roomInitRes.data.room_id;
+        const value = localStorage.getItem('playurl-' + room_id);
+        if (!value) {
+            const e = document.querySelector('#copy-playurl');
+            e.innerText = '无原画ｘ';
+            setTimeout(()=>{e.innerText = '复制链接'}, 1000);
+        } else {
+            navigator.clipboard.writeText(value);
+        }
+    }
+    window.setPlayurl = () => {
+        const value = prompt("请输入playurl json字符串\n如出错请取消勾选强制原画，留空并确定清除当前直播间设置");
+        if (value === null) return;
+        const room_id = window.__NEPTUNE_IS_MY_WAIFU__.roomInitRes.data.room_id;
+        if (value === "") {
+            localStorage.removeItem('playurl-' + room_id);
+        } else {
+            localStorage.setItem('playurl-' + room_id, value);
+        }
+    }
+
     waitForElement(()=>document.querySelector('#head-info-vm .right-ctnr .p-relative'), () => {
         const e = document.createElement("span");
         e.innerHTML = (
@@ -320,6 +342,8 @@
             '<label for="force-raw">强制原画</label><input type="checkbox" id="force-raw" onchange="saveConfig()">' +
             '<label for="auto-quality">自动原画</label><input type="checkbox" id="auto-quality" onchange="saveConfig()">' +
             '<br>' +
+            '<button id="copy-playurl" type="button" style="background: transparent;text-shadow: 1px 0 4px white;" onclick="copyPlayurl()">复制链接</button> ' +
+            '<button id="set-playurl" type="button" style="background: transparent;text-shadow: 1px 0 4px white;" onclick="setPlayurl()">设置链接！</button> ' +
             '<label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" onchange="saveConfig()" step="0.1" style="width: 3em;">'
         );
         e.style = 'text-shadow: 1px 0 4px white;text-align: right;';
