@@ -1,33 +1,27 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    http://tampermonkey.net/
-// @version      0.4.2
+// @version      0.5.0
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
 // @icon         https://www.bilibili.com/favicon.ico
 // @license      GPLv3 License
 // @supportURL   https://space.bilibili.com/521676
+// @supportURL   https://github.com/c-basalt/bilibili-live-seeker-script/
 // @run-at       document-start
 // @grant        none
 // ==/UserScript==
- 
+
 (function() {
- 
-    const consoleLog = console.log;
     'use strict';
- 
-    let videoElementId;
+
     const getVideoElement = () => {
         const e = document.getElementsByTagName('video')[0]
         window.videoElement = e || window.videoElement;
-        videoElementId = window.videoElementId = window.videoElement?.id;
-        if (!window.videoElement) {
-            // console.log(videoElementId, window.videoElementId, window.videoElement, e)
-        }
         return window.videoElement;
     }
- 
+
     const updatePlaybackRateDisplay = () => {
         const e = document.querySelector('.live-status');
         const v = getVideoElement();
@@ -37,24 +31,18 @@
             e.innerText = e.innerText.match(/^[^@\d]+/) + '@' + v.playbackRate.toFixed(2)
         }
     }
- 
+
     window.setRate = function (rate) {
-        if (Number(rate).toFixed(2) != '1.00') {
-            console.log('buffer', window.bufferlen().toFixed(3), 'rate', Number(rate).toFixed(2));
-        }
         const e = getVideoElement()
         if (!e) return
         if (e.playbackRate.toFixed(2) == Number(rate).toFixed(2)) return;
-        if (Number(rate).toFixed(2) === '1.00') {
-            console.log('buffer', window.bufferlen().toFixed(3), 'rate', Number(rate).toFixed(2));
-        }
         e.playbackRate = Number(rate).toFixed(2);
         updatePlaybackRateDisplay();
     }
     window.resetRate = function () {
         window.setRate(1);
     }
- 
+
     const statsBuffLen = () => {
         const e = document.querySelector('#p-video-info-bufferLength');
         if (!e) return null;
@@ -63,16 +51,13 @@
         if (!match) return null;
         return Number(match[1]);
     }
- 
+
     const videoBuffLen = () => {
         const e = getVideoElement();
-        if (!e) {
-            //console.log('video not found');
-            return null;
-        }
+        if (!e) return null;
         return e.buffered.end(0) - e.currentTime
     }
- 
+
     window.bufferlen = function() {
         const statsLen = statsBuffLen()
         const videoLen = videoBuffLen()
@@ -87,7 +72,7 @@
             return statsBuffLen() || videoBuffLen();
         }
     }
- 
+
     const getThres = () => {
         const e = document.querySelector('#buffer-threshold');
         if (!e) return null
@@ -95,7 +80,7 @@
         if (!value) return null
         return value;
     }
- 
+
     const adjustSpeedup = () => {
         const thres = getThres()
         if (!thres) return;
@@ -117,7 +102,7 @@
             console.log(e)
         }
     }
- 
+
     const adjustSpeeddown = () => {
         try {
             const bufferLen = window.bufferlen()
@@ -139,8 +124,18 @@
     }
     window.speedUpIntervalId = setInterval(()=>{adjustSpeedup()}, 1000)
     window.speedDownIntervalId = setInterval(()=>{adjustSpeeddown()}, 50)
- 
- 
+
+    const checkPaused = () => {
+        const e = document.querySelector('#prevent-pause');
+        if (!e?.checked) return
+        const status = document.querySelector('.live-status');
+        const v = getVideoElement();
+        if (v && status && status.innerText.match(/^直播/)) {
+            if (v.paused) v.play();
+        }
+    }
+    window.checkPausedIntervalId = setInterval(()=>{checkPaused()}, 1000)
+
     const checkIsLiveReload = (timeout) => {
         if (!window.__NEPTUNE_IS_MY_WAIFU__) return;
         const e = document.querySelector('#auto-reload');
@@ -174,23 +169,65 @@
     }
     window.checkReloadIntervalId = setInterval(()=>{checkIsLiveReload(5000)}, 180000);
     window.checkReloadIntervalId = setInterval(()=>{checkErrorReload(1000)}, 3000);
- 
- 
-    const origFetch = window.fetch;
-    window.fetch = function() {
-        let url = arguments[0];
-        if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
-            const e = document.querySelector('#force-flv');
-            if (e?.checked) {
-                url = url.replace(/protocol=0,[^&]+&/, 'protocol=0&');
-                url = url.replace(/codec=0,[^&]+&/, 'codec=0&');
-                arguments[0] = url;
+
+    const recordPlayUrl = (playurl) => {
+        if (!playurl) return;
+        console.log('playurl', playurl);
+        try {
+            console.log('playurl', playurl);
+            const baseurl = playurl.stream[0].format[0].codec[0].base_url;
+            const qn = playurl.stream[0].format[0].codec[0].current_qn;
+            if (qn === 10000 && baseurl.match(/\/live_\d+_\d+\.flv/)) {
+                // non-transcoded url format
+                console.log('raw stream url', baseurl);
+                localStorage.setItem('playurl-' + playurl.cid, JSON.stringify(playurl));
             }
+        } catch (e) {
+            console.log(e);
         }
-        console.log('fetch request', arguments);
-        return origFetch.apply(this, arguments);
     }
- 
+
+    const expiredPlayurlChecker = () => {
+        const keys = Array.from(Array(localStorage.length).keys()).map(i=>localStorage.key(i));
+        keys.filter(i=>i.match(/^playurl-\d+/)).forEach(i => {
+            const cachedUrl = JSON.parse(localStorage.getItem(i));
+            const expireTs = Number(cachedUrl.stream[0].format[0].codec[0].url_info[0].extra.match(/expires=(\d+)/)[1]);
+            if (Date.now()/1000 > expireTs) localStorage.removeItem(i);
+        })
+    }
+    window.checkPlayurlIntervalId = setInterval(()=>{expiredPlayurlChecker()}, 10*60*1000);
+
+    const interceptPlayurl = (r) => {
+        console.log(r);
+        const playurl = r.data?.playurl_info?.playurl
+        if (!playurl) return r;
+        const e = document.querySelector('#force-raw');
+        if (!e?.checked) return r;
+        expiredPlayurlChecker();
+        const cachedUrl = JSON.parse(localStorage.getItem('playurl-' + playurl.cid));
+        if (!cachedUrl) return r;
+        r.data.playurl_info.playurl = cachedUrl;
+        return r;
+    }
+
+    const origFetch = window.fetch;
+    window.fetch = async function() {
+        let url = arguments[0];
+        if (!url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) return origFetch.apply(this, arguments);
+        const e = document.querySelector('#force-flv');
+        if (!e?.checked) return origFetch.apply(this, arguments);
+
+        url = url.replace(/protocol=0,[^&]+&/, 'protocol=0&');
+        url = url.replace(/codec=0,[^&]+&/, 'codec=0&');
+        arguments[0] = url;
+        console.log('fetch request', arguments);
+        const response = await origFetch.apply(this, arguments);
+        recordPlayUrl((await response.clone().json()).data?.playurl_info?.playurl)
+        const r = await response.clone().json()
+        response.json = async () => { return interceptPlayurl(r) }
+        return response;
+    }
+
     const waitForElement = (checker, exec) => {
         if (checker()) {
             exec();
@@ -198,28 +235,65 @@
             setTimeout(() => waitForElement(checker, exec), 100)
         }
     }
- 
+
     window.saveConfig = () => {
         console.log('config changed');
         let e;
-        e = document.querySelector('#auto-reload');
-        if (e) localStorage.setItem('auto-reload', e.checked);
-        e = document.querySelector('#force-flv');
-        if (e) localStorage.setItem('force-flv', e.checked);
+        [
+            'auto-reload',
+            'force-flv',
+            'prevent-pause',
+            'force-raw',
+            'auto-quality',
+        ].forEach( i => {
+            const e = document.querySelector('#'+i);
+            if (e) localStorage.setItem(i, e.checked);
+        })
         e = document.querySelector('#buffer-threshold');
         if (e) localStorage.setItem('buffer-threshold', e.value);
     }
- 
-    if (localStorage.getItem('auto-reload') === null) localStorage.setItem('auto-reload', true);
-    if (localStorage.getItem('force-flv') === null) localStorage.setItem('force-flv', true);
-    if (localStorage.getItem('buffer-threshold') === null) localStorage.setItem('buffer-threshold', 1.5);
- 
-    if (JSON.parse(localStorage.getItem('force-flv'))) {
-        Object.defineProperty(window, '__NEPTUNE_IS_MY_WAIFU__', {
-            get: function() { return this._init_data_neptune },
-            set: function(newdata) {
-                if (newdata.roomInitRes.data?.playurl_info?.playurl?.stream) {
-                    const playurl = newdata.roomInitRes.data.playurl_info.playurl;
+
+    const getStoredValue = (key) => {
+        const defaultValues = {
+            'auto-reload': true,
+            'force-flv': true,
+            'prevent-pause': false,
+            'force-raw': false,
+            'auto-quality': true,
+            'buffer-threshold': 1.5,
+        };
+        try {
+            const value = JSON.parse(localStorage.getItem(key));
+            if (value !== null) return value;
+            return defaultValues[key];
+        } catch {
+            return defaultValues[key];
+        }
+    }
+
+    const getPlayUrl = (room_id) => {
+        const request = new XMLHttpRequest();
+        console.log('request playurl')
+        request.open('GET', "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=" + room_id + "&protocol=0&format=0,1,2&codec=0&qn=10000&platform=web", false);
+        request.send(null);
+        if (request.status === 200) {
+            return JSON.parse(request.responseText).data?.playurl_info?.playurl
+        }
+    }
+
+    Object.defineProperty(window, '__NEPTUNE_IS_MY_WAIFU__', {
+        get: function() { return this._init_data_neptune },
+        set: function(newdata) {
+            if (newdata.roomInitRes.data?.playurl_info?.playurl?.stream) {
+                let playurl = newdata.roomInitRes.data.playurl_info.playurl;
+                if (getStoredValue('auto-quality')) {
+                    if (playurl.stream[0].format[0].codec[0].current_qn < 10000) {
+                        playurl = getPlayUrl(newdata.roomInitRes.data.room_id) || playurl;
+                        recordPlayUrl(playurl);
+                        newdata.roomInitRes.data.playurl_info.playurl = playurl;
+                    }
+                }
+                if (getStoredValue('force-flv')) {
                     const filteredStream = playurl.stream.filter( i => i.protocol_name !== "http_hls" );
                     if (filteredStream.length) playurl.stream = filteredStream;
                     playurl.stream.forEach( i => {
@@ -229,15 +303,25 @@
                         })
                     });
                 }
-                this._init_data_neptune = newdata;
-                console.log(newdata)
             }
-        });
-    }
- 
+            this._init_data_neptune = newdata;
+            console.log(newdata)
+        }
+    });
+
     waitForElement(()=>document.querySelector('#head-info-vm .right-ctnr .p-relative'), () => {
         const e = document.createElement("span");
-        e.innerHTML = '<label for="hide_stats">隐藏统计</label><input type="checkbox" id="hide_stats"><label for="auto-reload">自动刷新</label><input type="checkbox" id="auto-reload" onchange="saveConfig()"><label for="auto-reload">强制avc+flv</label><input type="checkbox" id="force-flv" onchange="saveConfig()"><br><label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" min="1" max="10" onchange="saveConfig()">';
+        e.innerHTML = (
+            '<label for="hide_stats">隐藏统计</label><input type="checkbox" id="hide_stats">' +
+            '<label for="prevent-pause">避免暂停</label><input type="checkbox" id="prevent-pause" onchange="saveConfig()">' +
+            '<label for="auto-reload">自动刷新</label><input type="checkbox" id="auto-reload" onchange="saveConfig()">' +
+            '<br>' +
+            '<label for="force-flv">强制avc+flv</label><input type="checkbox" id="force-flv" onchange="saveConfig()">' +
+            '<label for="force-raw">强制原画</label><input type="checkbox" id="force-raw" onchange="saveConfig()">' +
+            '<label for="auto-quality">自动原画</label><input type="checkbox" id="auto-quality" onchange="saveConfig()">' +
+            '<br>' +
+            '<label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" onchange="saveConfig()" step="0.1" style="width: 3em;">'
+        );
         e.style = 'text-shadow: 1px 0 4px white;text-align: right;';
         document.querySelector('#head-info-vm .right-ctnr .p-relative').appendChild(e);
         document.querySelector('#hide_stats').onchange = (e) => {
@@ -261,10 +345,18 @@
                 Array.prototype.filter.call(document.querySelector('.web-player-video-info-panel').querySelectorAll('div'), i=>i.innerText==='[x]').forEach(i=>{i.style.removeProperty('display')});
             }
         }
-        document.querySelector('#auto-reload').checked = JSON.parse(localStorage.getItem('auto-reload'));
-        document.querySelector('#force-flv').checked = JSON.parse(localStorage.getItem('force-flv'));
-        document.querySelector('#buffer-threshold').value = JSON.parse(localStorage.getItem('buffer-threshold'));
+
+        [
+            'auto-reload',
+            'force-flv',
+            'prevent-pause',
+            'force-raw',
+            'auto-quality',
+        ].forEach( i => {
+            document.querySelector('#'+i).checked = getStoredValue(i);
+        })
+        document.querySelector('#buffer-threshold').value = getStoredValue('buffer-threshold');
         window.saveConfig();
     })
- 
+
 })();
