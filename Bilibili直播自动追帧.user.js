@@ -1,20 +1,23 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
-// @namespace    http://tampermonkey.net/
-// @version      0.5.2
+// @namespace    https://space.bilibili.com/521676
+// @version      0.5.3
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
 // @icon         https://www.bilibili.com/favicon.ico
 // @license      GPLv3 License
+// @homepageURL  https://github.com/c-basalt/bilibili-live-seeker-script/
 // @supportURL   https://space.bilibili.com/521676
-// @supportURL   https://github.com/c-basalt/bilibili-live-seeker-script/
 // @run-at       document-start
 // @grant        none
 // ==/UserScript==
 
 (function() {
     'use strict';
+
+    if (!location.href.match(/https:\/\/live\.bilibili\.com\/\d+/)) return;
+    // 仅对直播间生效
 
     const getVideoElement = () => {
         const e = document.getElementsByTagName('video')[0]
@@ -79,45 +82,51 @@
         return value;
     }
 
+    const speedupThres = [
+        [2, 1.3],
+        [1, 1.2],
+        [0, 1.1]
+    ]
     const adjustSpeedup = () => {
         const thres = getThres()
         if (!thres) return;
         try {
             if (!isLiveStream()) return;
             const bufferLen = window.bufferlen()
-            if (bufferLen === null) {
-                return;
+            if (bufferLen === null) return;
+            let diffThres, rate;
+            for (let i = 0; i < speedupThres.length; i++) {
+                [diffThres, rate] = speedupThres[i];
+                if (bufferLen - thres > diffThres) {
+                    window.setRate(rate);
+                    return;
+                }
             }
-            if (bufferLen - thres > 2) {
-                window.setRate(1.3);
-            } else if (bufferLen - thres > 1) {
-                window.setRate(1.2);
-            } else if (bufferLen > thres) {
-                window.setRate(1.1);
-            } else if (getVideoElement() && getVideoElement().playbackRate > 1) {
-                window.resetRate();
-            }
+            if (getVideoElement()?.playbackRate > 1) window.resetRate();
         } catch(e) {
             console.log(e)
         }
     }
 
+    const speeddownThres = [
+        [0.2, 0.1],
+        [0.3, 0.3],
+        [0.6, 0.6]
+    ]
     const adjustSpeeddown = () => {
         try {
             if (!isLiveStream()) return;
             const bufferLen = window.bufferlen()
-            if (bufferLen === null) {
-                return;
+            if (bufferLen === null) return;
+            let thres, rate;
+            for (let i = 0; i < speeddownThres.length; i++) {
+                [thres, rate] = speeddownThres[i];
+                if (bufferLen < thres) {
+                    window.setRate(rate);
+                    return;
+                }
             }
-            if (bufferLen < 0.2) {
-                window.setRate(0.1);
-            } else if (bufferLen < 0.3) {
-                window.setRate(0.3);
-            } else if (bufferLen < 0.6) {
-                window.setRate(0.6);
-            } else if (getVideoElement() && getVideoElement().playbackRate < 1) {
-                window.resetRate();
-            }
+            if (getVideoElement()?.playbackRate < 1) window.resetRate();
         } catch(e) {
             console.log(e)
         }
@@ -145,10 +154,15 @@
         const status = document.querySelector('.live-status');
         const v = getVideoElement();
         if (v && isLiveStream()) {
-            if (v.paused) v.play();
+            if (v.paused) {
+                const thres = getThres();
+                const bufferLen = window.bufferlen();
+                if (thres && bufferLen && thres > bufferLen) return;
+                v.play();
+            }
         }
     }
-    window.checkPausedIntervalId = setInterval(()=>{checkPaused()}, 1000)
+    window.checkPausedIntervalId = setInterval(()=>{checkPaused()}, 500)
 
     const checkIsLiveReload = (timeout) => {
         if (!window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes) return;
@@ -189,7 +203,7 @@
             const baseurl = playurl.stream[0].format[0].codec[0].base_url;
             const qn = playurl.stream[0].format[0].codec[0].current_qn;
             if (qn === 10000 && baseurl.match(/\/live_\d+_\d+\.flv/)) {
-                // non-transcoded url format
+                // 未二压的链接格式
                 console.log('raw stream url', baseurl);
                 localStorage.setItem('playurl-' + playurl.cid, JSON.stringify(playurl));
             }
@@ -223,18 +237,23 @@
     const origFetch = window.fetch;
     window.fetch = async function() {
         let url = arguments[0];
-        if (!url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) return origFetch.apply(this, arguments);
-        if (!isChecked('force-flv')) return origFetch.apply(this, arguments);
-
-        url = url.replace(/protocol=0,[^&]+&/, 'protocol=0&');
-        url = url.replace(/codec=0,[^&]+&/, 'codec=0&');
-        arguments[0] = url;
-        console.log('fetch request', arguments);
-        const response = await origFetch.apply(this, arguments);
-        cachePlayUrl((await response.clone().json()).data?.playurl_info?.playurl)
-        const r = await response.clone().json()
-        response.json = async () => { return interceptPlayurl(r) }
-        return response;
+        if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo') && isChecked('force-flv')) {
+            url = url.replace(/protocol=0,[^&]+/, 'protocol=0');
+            url = url.replace(/codec=0,[^&]+/, 'codec=0');
+            arguments[0] = url;
+            console.log('fetch request', arguments);
+            const response = await origFetch.apply(this, arguments);
+            cachePlayUrl((await response.clone().json()).data?.playurl_info?.playurl)
+            const r = await response.clone().json()
+            response.json = async () => { return interceptPlayurl(r) }
+            return response;
+        } else if (url.match('api.live.bilibili.com/live/getRoundPlayVideo') && isChecked('block-roundplay')) {
+            const response = await origFetch.apply(this, arguments);
+            response.json = async () => ({"code":0,"data":{"cid":-3}})
+            return response
+        } else {
+            return origFetch.apply(this, arguments);
+        }
     }
 
     const getStoredValue = (key) => {
@@ -244,6 +263,7 @@
             'prevent-pause': false,
             'force-raw': false,
             'auto-quality': true,
+            'block-roundplay': false,
             'buffer-threshold': 1.5,
         };
         try {
@@ -295,18 +315,11 @@
 
     window.saveConfig = () => {
         console.log('config changed');
-        let e;
-        [
-            'auto-reload',
-            'force-flv',
-            'prevent-pause',
-            'force-raw',
-            'auto-quality',
-        ].forEach( i => {
-            const e = document.querySelector('#'+i);
-            if (e) localStorage.setItem(i, e.checked);
+        Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=checkbox]')).forEach( e => {
+            if (e.id === "hide_stats") return;
+            localStorage.setItem(e.id, e.checked);
         })
-        e = document.querySelector('#buffer-threshold');
+        const e = document.querySelector('#buffer-threshold');
         if (e) localStorage.setItem('buffer-threshold', e.value);
     }
     window.copyPlayurl = () => {
@@ -358,6 +371,7 @@
             '<label for="force-flv">强制avc+flv</label><input type="checkbox" id="force-flv" onchange="saveConfig()">' +
             '<label for="force-raw">强制原画</label><input type="checkbox" id="force-raw" onchange="saveConfig()">' +
             '<label for="auto-quality">自动原画</label><input type="checkbox" id="auto-quality" onchange="saveConfig()">' +
+            '<label for="block-roundplay">阻止轮播</label><input type="checkbox" id="block-roundplay" onchange="saveConfig()">' +
             '<br>' +
             '<button id="copy-playurl" type="button" class="control-btn" onclick="copyPlayurl()">复制链接</button> ' +
             '<button id="set-playurl" type="button" class="control-btn" onclick="setPlayurl()">设置链接!</button> ' +
@@ -365,6 +379,7 @@
             '<style>.control-btn { width:5em;padding:1px;background: transparent;text-shadow: 1px 0 4px white; }</style>'
         );
         e.style = 'text-shadow: 1px 0 4px white;text-align: right;';
+        e.id = 'seeker-control-panel';
         document.querySelector('#head-info-vm .right-ctnr .p-relative').appendChild(e);
         document.querySelector('#hide_stats').onchange = (e) => {
             if (!document.querySelector('.web-player-video-info-panel')) {
@@ -388,17 +403,11 @@
             }
         }
 
-        [
-            'auto-reload',
-            'force-flv',
-            'prevent-pause',
-            'force-raw',
-            'auto-quality',
-        ].forEach( i => {
-            document.querySelector('#'+i).checked = getStoredValue(i);
+        Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=checkbox]')).forEach( e => {
+            if (e.id === "hide_stats") return;
+            e.checked = getStoredValue(e.id);
         })
         document.querySelector('#buffer-threshold').value = getStoredValue('buffer-threshold');
-        window.saveConfig();
     })
 
 })();
