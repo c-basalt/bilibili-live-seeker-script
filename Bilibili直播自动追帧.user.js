@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.5.3
+// @version      0.5.4
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -219,6 +219,14 @@
             const expireTs = Number(cachedUrl.stream[0].format[0].codec[0].url_info[0].extra.match(/expires=(\d+)/)[1]);
             if (Date.now()/1000 > expireTs) localStorage.removeItem(i);
         })
+        setTimeout(() => {
+            const room_id = window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id;
+            if (!localStorage.getItem('playurl-' + room_id)) {
+                document.querySelector('#force-raw').style = 'filter: grayscale(1) brightness(1.5)';
+            } else {
+                document.querySelector('#force-raw').style = '';
+            }
+        }, 200);
     }
     window.checkPlayurlIntervalId = setInterval(()=>{expiredPlayurlChecker()}, 10*60*1000);
 
@@ -307,6 +315,11 @@
                     });
                 }
                 cachePlayUrl(playurl);
+                if (getStoredValue('force-raw')) {
+                    expiredPlayurlChecker();
+                    const cachedUrl = JSON.parse(localStorage.getItem('playurl-' + playurl.cid));
+                    if (cachedUrl) newdata.roomInitRes.data.playurl_info.playurl = cachedUrl;
+                }
             }
             this._init_data_neptune = newdata;
             console.log(newdata)
@@ -408,6 +421,7 @@
             e.checked = getStoredValue(e.id);
         })
         document.querySelector('#buffer-threshold').value = getStoredValue('buffer-threshold');
+        expiredPlayurlChecker();
     })
 
 })();
