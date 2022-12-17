@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.5.4
+// @version      0.5.5
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -16,7 +16,7 @@
 (function() {
     'use strict';
 
-    if (!location.href.match(/https:\/\/live\.bilibili\.com\/\d+/)) return;
+    if (!location.href.match(/https:\/\/live\.bilibili\.com\/(blanc\/)?\d+/)) return;
     // 仅对直播间生效
 
     const getVideoElement = () => {
@@ -353,6 +353,7 @@
         const room_id = window.__NEPTUNE_IS_MY_WAIFU__.roomInitRes.data.room_id;
         if (value === "") {
             localStorage.removeItem('playurl-' + room_id);
+            expiredPlayurlChecker();
         } else {
             try {
                 const data = JSON.parse(value);
