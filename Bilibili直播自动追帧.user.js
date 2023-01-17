@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.5.6
+// @version      0.5.7
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -148,6 +148,23 @@
         const e = document.querySelector('#'+i);
         return e?.checked;
     }
+    const getRoomInit = () => {
+        const roomId = location.href.match(/\/(\d+)(\?|$)/)[1];
+        const request = new XMLHttpRequest();
+        request.open('GET', "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=" + roomId + "&protocol=0&format=0,1,2&codec=0&qn=10000&platform=web", false);
+        request.send(null)
+        if (request.status === 200) {
+            cacheRoomInit(JSON.parse(request.responseText))
+        }
+    }
+    const getRoomId = () => {
+        if (!window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id) getRoomInit();
+        return window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id;
+    }
+    const getOwnerUid = () => {
+        if (!window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.uid) getRoomInit();
+        return window.__NEPTUNE_IS_MY_WAIFU__.roomInitRes.data.uid;
+    }
 
     const checkPaused = () => {
         if (!isChecked('prevent-pause')) return
@@ -166,7 +183,6 @@
 
 
     const offLiveAutoReload = ({timeout, lastChat}) => {
-        if (!window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes) return;
         if (!isChecked('auto-reload')) return;
         if (isLiveStream() === false && isChecked('block-roundplay') && getStoredValue('block-roundplay')) {
             const chatHistory = document.querySelector('.chat-history-panel').innerText;
@@ -180,10 +196,9 @@
         }
     }
     const checkIsLiveReload = (timeout) => {
-        if (!window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes) return;
         if (!isChecked('auto-reload')) return
         if (isLiveStream() === false) {
-            fetch("https://api.bilibili.com/x/space/acc/info?jsonp=jsonp&mid=" + window.__NEPTUNE_IS_MY_WAIFU__.roomInitRes.data.uid)
+            fetch("https://api.bilibili.com/x/space/wbi/acc/info?mid=" + getOwnerUid())
                 .then(r => r.json())
                 .then(r => {
                 if (r.code === 0 && r.data.live_room.liveStatus) {
@@ -211,6 +226,15 @@
     window.checkLiveReloadIntervalId = setInterval(()=>{checkIsLiveReload(5000)}, 180*1000);
     window.checkErrorReloadIntervalId = setInterval(()=>{checkErrorReload(1000)}, 3000);
 
+
+    const cacheRoomInit = (roomInitRsp) => {
+        if (window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data) return;
+        if (!window.__NEPTUNE_IS_MY_WAIFU__) {
+            window.__NEPTUNE_IS_MY_WAIFU__ = { roomInitRes: roomInitRsp };
+        } else {
+            window.__NEPTUNE_IS_MY_WAIFU__.roomInitRes = roomInitRsp;
+        }
+    }
     const cachePlayUrl = (playurl) => {
         if (!playurl) return;
         console.log('playurl', playurl);
@@ -236,7 +260,7 @@
             if (Date.now()/1000 > expireTs) localStorage.removeItem(i);
         })
         setTimeout(() => {
-            const room_id = window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id;
+            const room_id = getRoomId();
             if (!localStorage.getItem('playurl-' + room_id)) {
                 document.querySelector('#force-raw').style = 'filter: grayscale(1) brightness(1.5)';
             } else {
@@ -279,6 +303,36 @@
             return origFetch.apply(this, arguments);
         }
     }
+
+    const origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function() {
+        let url = arguments[1];
+        if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
+            if (getStoredValue('auto-quality')) {
+                url = url.replace(/qn=[^&]+/, 'qn=10000');
+            }
+            if (getStoredValue('force-flv')) {
+                url = url.replace(/protocol=0,[^&]+/, 'protocol=0');
+                url = url.replace(/codec=0,[^&]+/, 'codec=0');
+            }
+            arguments[1] = url;
+        }
+        return origOpen.apply(this, arguments);
+    }
+
+    const xhrAccessor = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, 'responseText');
+        Object.defineProperty(XMLHttpRequest.prototype, 'responseText', {
+            get: function() {
+                if (this.responseURL.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
+                    cacheRoomInit(JSON.parse(xhrAccessor.get.call(this)))
+                }
+                return xhrAccessor.get.call(this);
+            },
+            set: function(str) {
+                return xhrAccessor.set.call(this, str);
+            },
+            configurable: true
+        });
 
     const getStoredValue = (key) => {
         const defaultValues = {
@@ -352,7 +406,7 @@
         if (e) localStorage.setItem('buffer-threshold', e.value);
     }
     window.copyPlayurl = () => {
-        const room_id = window.__NEPTUNE_IS_MY_WAIFU__.roomInitRes.data.room_id;
+        const room_id = getRoomId();
         const value = localStorage.getItem('playurl-' + room_id);
         const e = document.querySelector('#copy-playurl');
         if (!value) {
@@ -366,7 +420,7 @@
     window.setPlayurl = () => {
         const value = prompt("请输入playurl json字符串\n如出错请取消勾选强制原画；留空点击确定清除当前直播间设置");
         if (value === null) return;
-        const room_id = window.__NEPTUNE_IS_MY_WAIFU__.roomInitRes.data.room_id;
+        const room_id = getRoomId();
         if (value === "") {
             localStorage.removeItem('playurl-' + room_id);
             expiredPlayurlChecker();
