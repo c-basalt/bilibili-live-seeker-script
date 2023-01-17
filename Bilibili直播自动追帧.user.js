@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.5.5
+// @version      0.5.6
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -164,6 +164,21 @@
     }
     window.checkPausedIntervalId = setInterval(()=>{checkPaused()}, 500)
 
+
+    const offLiveAutoReload = ({timeout, lastChat}) => {
+        if (!window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes) return;
+        if (!isChecked('auto-reload')) return;
+        if (isLiveStream() === false && isChecked('block-roundplay') && getStoredValue('block-roundplay')) {
+            const chatHistory = document.querySelector('.chat-history-panel').innerText;
+            if (timeout) {
+                setTimeout(()=>{offLiveAutoReload({lastChat: chatHistory})}, timeout)
+            } else {
+                if (chatHistory === lastChat) {
+                    window.location.reload();
+                }
+            }
+        }
+    }
     const checkIsLiveReload = (timeout) => {
         if (!window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes) return;
         if (!isChecked('auto-reload')) return
@@ -192,8 +207,9 @@
             }
         }
     }
-    window.checkReloadIntervalId = setInterval(()=>{checkIsLiveReload(5000)}, 180000);
-    window.checkReloadIntervalId = setInterval(()=>{checkErrorReload(1000)}, 3000);
+    window.offLiveReloadIntervalId = setInterval(()=>{offLiveAutoReload({timeout: 3600*1000})}, 600*1000);
+    window.checkLiveReloadIntervalId = setInterval(()=>{checkIsLiveReload(5000)}, 180*1000);
+    window.checkErrorReloadIntervalId = setInterval(()=>{checkErrorReload(1000)}, 3000);
 
     const cachePlayUrl = (playurl) => {
         if (!playurl) return;
