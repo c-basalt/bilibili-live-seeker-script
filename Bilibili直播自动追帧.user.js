@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.0
+// @version      0.6.1
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -203,6 +203,8 @@
             } else {
                 if (chatHistory === lastChat) {
                     window.location.reload();
+                } else {
+                    console.debug('chat history changed');
                 }
             }
         }
@@ -213,7 +215,9 @@
             fetch("https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=" + getRoomId() + "&protocol=0&format=0,1,2&codec=0&qn=10000&platform=web")
                 .then(r => r.json())
                 .then(r => {
+                console.debug('live status', r.data?.live_status);
                 if (r.data?.live_status === 1) {
+                    // 0: 闲置，1: 直播，2: 轮播
                     if (timeout) {
                         setTimeout(()=>{checkIsLiveReload()}, timeout);
                     } else {
@@ -230,7 +234,7 @@
             if (timeout) {
                 setTimeout(()=>{checkErrorReload()}, timeout);
             } else {
-                window.location.reload()
+                window.location.reload();
             }
         }
     }
@@ -246,11 +250,11 @@
         request.open('GET', url, false);
         request.send(null);
         if (request.status === 200) {
-            return JSON.parse(request.responseText)
+            return JSON.parse(request.responseText);
         }
     }
     const getPlayUrl = (room_id) => {
-        console.debug('request playurl')
+        console.debug('request playurl');
         const rsp = xhrGetApi("https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=" + room_id + "&protocol=0,1&format=0,1,2&codec=0,1&qn=10000&platform=web");
         return rsp.data?.playurl_info?.playurl;
     }
@@ -310,9 +314,10 @@
         cachePlayUrl(playurl);
         if (!playurl) return r;
         console.debug('playinfo', r);
-        if (!isChecked('force-raw')) return r;
+        if (!isChecked('force-raw', true)) return r;
         expiredPlayurlChecker();
         const cachedUrl = JSON.parse(localStorage.getItem('playurl-' + playurl.cid));
+        console.debug('load cached url', cachedUrl);
         if (!cachedUrl) return r;
         r.data.playurl_info.playurl = cachedUrl;
         return r;
@@ -321,19 +326,21 @@
     const origFetch = window.fetch;
     window.fetch = async function() {
         let url = arguments[0];
-        if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo') && isChecked('force-flv', true)) {
-            url = url.replace(/protocol=0,[^&]+/, 'protocol=0');
-            url = url.replace(/codec=0,[^&]+/, 'codec=0');
+        if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
+            if (isChecked('force-flv', true)) {
+                url = url.replace(/protocol=0,[^&]+/, 'protocol=0');
+                url = url.replace(/codec=0,[^&]+/, 'codec=0');
+            }
             arguments[0] = url;
             console.debug('fetch request', arguments);
             const response = await origFetch.apply(this, arguments);
-            const r = interceptPlayurl(await response.clone().json())
-            response.json = async () => { return r }
+            const r = interceptPlayurl(await response.clone().json());
+            response.json = async () => { return r };
             return response;
         } else if (url.match('api.live.bilibili.com/live/getRoundPlayVideo') && isChecked('block-roundplay', true)) {
             const response = await origFetch.apply(this, arguments);
-            response.json = async () => ({"code":0,"data":{"cid":-3}})
-            return response
+            response.json = async () => ({"code":0,"data":{"cid":-3}});
+            return response;
         } else {
             return origFetch.apply(this, arguments);
         }
@@ -361,7 +368,7 @@
             if (this.responseURL.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
                 const rsp = JSON.parse(xhrAccessor.get.call(this));
                 cacheRoomInit(rsp);
-                cachePlayUrl(rsp.data?.playurl_info?.playurl);
+                return JSON.stringify(interceptPlayurl(rsp));
             }
             return xhrAccessor.get.call(this);
         },
@@ -397,7 +404,7 @@
                 newdata.roomInitRes = interceptPlayurl(newdata.roomInitRes);
             }
             this._init_data_neptune = newdata;
-            console.debug(newdata)
+            console.debug('init data', newdata);
         }
     });
 
@@ -450,7 +457,7 @@
         if (checker()) {
             exec();
         } else {
-            setTimeout(() => waitForElement(checker, exec), 100)
+            setTimeout(() => waitForElement(checker, exec), 100);
         }
     }
     waitForElement(()=>document.querySelector('#head-info-vm .right-ctnr .p-relative'), () => {
@@ -465,12 +472,12 @@
             '<label for="auto-quality">自动原画</label><input type="checkbox" id="auto-quality" onchange="saveConfig()">' +
             '<label for="block-roundplay">阻止轮播</label><input type="checkbox" id="block-roundplay" onchange="saveConfig()">' +
             '<br>' +
-            '<button id="copy-playurl" type="button" onclick="copyPlayurl()">复制链接</button> ' +
-            '<button id="set-playurl" type="button" onclick="setPlayurl()">设置链接!</button> ' +
+            '<button id="copy-playurl" type="button" onclick="copyPlayurl()">复制链接</button>' +
+            '<button id="set-playurl" type="button" onclick="setPlayurl()">设置链接!</button>' +
             '<label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" onchange="saveConfig()" step="0.1" style="width: 3em;">' +
-            '<style>#seeker-control-panel button { width:5.5em;padding:1px;background: transparent; border: 1.5px solid #999; border-radius: 4px; color: #999; filter: contrast(0.5);} ' +
-            '#seeker-control-panel button:hover { filter: none; }' +
-            '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.5);} #seeker-control-panel input { vertical-align: middle; margin:1px; } </style>'
+            '<style>#seeker-control-panel button { width:5.5em;padding:1px;background: transparent; border: 1.5px solid #999; border-radius: 4px; color: #999; filter: contrast(0.6);}' +
+            '#seeker-control-panel button:hover { filter: none; } #seeker-control-panel button:active { filter: none; transform: translate(0.3px, 0.3px); }' +
+            '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.6);} #seeker-control-panel input { vertical-align: middle; margin:1px; }</style>'
         );
         e.style = 'text-align: right;';
         e.id = 'seeker-control-panel';
