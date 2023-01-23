@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.5.7
+// @version      0.6.0
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -18,6 +18,8 @@
 
     if (!location.href.match(/https:\/\/live\.bilibili\.com\/(blanc\/)?\d+/)) return;
     // 仅对直播间生效
+
+    // ----------------------- 播放器追帧 -----------------------
 
     const getVideoElement = () => {
         const e = document.getElementsByTagName('video')[0]
@@ -135,40 +137,50 @@
     window.speedDownIntervalId = setInterval(()=>{adjustSpeeddown()}, 50)
 
 
+    // ----------------------- 获取参数 -----------------------
+
+    const getStoredValue = (key) => {
+        const defaultValues = {
+            'auto-reload': true,
+            'force-flv': true,
+            'prevent-pause': false,
+            'force-raw': false,
+            'auto-quality': true,
+            'block-roundplay': false,
+            'buffer-threshold': 1.5,
+        };
+        try {
+            const value = JSON.parse(localStorage.getItem(key));
+            if (value !== null) return value;
+            return defaultValues[key];
+        } catch {
+            return defaultValues[key];
+        }
+    }
+    const isChecked = (i, fallback) => {
+        const e = document.querySelector('#'+i);
+        if (!e && fallback) return getStoredValue(i);
+        return e?.checked;
+    }
     const isLiveStream = () => {
-        const status = document.querySelector('.live-status');
-        if (!status) return null;
-        if (status.innerText.match(/^直播/)) {
+        const e = document.querySelector('.live-status');
+        if (!e) return undefined;
+        if (e.innerText.match(/^直播/)) {
             return true;
         } else {
             return false;
         }
     }
-    const isChecked = (i) => {
-        const e = document.querySelector('#'+i);
-        return e?.checked;
-    }
-    const getRoomInit = () => {
-        const roomId = location.href.match(/\/(\d+)(\?|$)/)[1];
-        const request = new XMLHttpRequest();
-        request.open('GET', "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=" + roomId + "&protocol=0&format=0,1,2&codec=0&qn=10000&platform=web", false);
-        request.send(null)
-        if (request.status === 200) {
-            cacheRoomInit(JSON.parse(request.responseText))
-        }
-    }
     const getRoomId = () => {
         if (!window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id) getRoomInit();
-        return window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id;
+        return window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id || Number(location.href.match(/\/(\d+)/)[1]);
     }
-    const getOwnerUid = () => {
-        if (!window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.uid) getRoomInit();
-        return window.__NEPTUNE_IS_MY_WAIFU__.roomInitRes.data.uid;
-    }
+
+
+    // ----------------------- 项目检查循环 -----------------------
 
     const checkPaused = () => {
         if (!isChecked('prevent-pause')) return
-        const status = document.querySelector('.live-status');
         const v = getVideoElement();
         if (v && isLiveStream()) {
             if (v.paused) {
@@ -198,10 +210,10 @@
     const checkIsLiveReload = (timeout) => {
         if (!isChecked('auto-reload')) return
         if (isLiveStream() === false) {
-            fetch("https://api.bilibili.com/x/space/wbi/acc/info?mid=" + getOwnerUid())
+            fetch("https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=" + getRoomId() + "&protocol=0&format=0,1,2&codec=0&qn=10000&platform=web")
                 .then(r => r.json())
                 .then(r => {
-                if (r.code === 0 && r.data.live_room.liveStatus) {
+                if (r.data?.live_status === 1) {
                     if (timeout) {
                         setTimeout(()=>{checkIsLiveReload()}, timeout);
                     } else {
@@ -223,9 +235,33 @@
         }
     }
     window.offLiveReloadIntervalId = setInterval(()=>{offLiveAutoReload({timeout: 3600*1000})}, 600*1000);
-    window.checkLiveReloadIntervalId = setInterval(()=>{checkIsLiveReload(5000)}, 180*1000);
+    window.checkLiveReloadIntervalId = setInterval(()=>{checkIsLiveReload(10*1000)}, 300*1000);
     window.checkErrorReloadIntervalId = setInterval(()=>{checkErrorReload(1000)}, 3000);
 
+
+    // ----------------------- 网络请求 -----------------------
+
+    const xhrGetApi = (url) => {
+        const request = new XMLHttpRequest();
+        request.open('GET', url, false);
+        request.send(null);
+        if (request.status === 200) {
+            return JSON.parse(request.responseText)
+        }
+    }
+    const getPlayUrl = (room_id) => {
+        console.debug('request playurl')
+        const rsp = xhrGetApi("https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=" + room_id + "&protocol=0,1&format=0,1,2&codec=0,1&qn=10000&platform=web");
+        return rsp.data?.playurl_info?.playurl;
+    }
+    const getRoomInit = () => {
+        const roomId = location.href.match(/\/(\d+)(\?|$)/)[1];
+        const rsp = xhrGetApi("https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=" + roomId + "&protocol=0,1&format=0,1,2&codec=0,1&qn=10000&platform=web");
+        cacheRoomInit(rsp);
+    }
+
+
+    // ----------------------- 网络请求hook -----------------------
 
     const cacheRoomInit = (roomInitRsp) => {
         if (window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data) return;
@@ -236,15 +272,14 @@
         }
     }
     const cachePlayUrl = (playurl) => {
-        if (!playurl) return;
-        console.log('playurl', playurl);
+        if (!playurl?.stream) return;
         try {
-            console.log('playurl', playurl);
+            console.debug('playurl', playurl);
             const baseurl = playurl.stream[0].format[0].codec[0].base_url;
             const qn = playurl.stream[0].format[0].codec[0].current_qn;
             if (qn === 10000 && baseurl.match(/\/live_\d+_\d+\.flv/)) {
                 // 未二压的链接格式
-                console.log('raw stream url', baseurl);
+                console.debug('raw stream url', baseurl);
                 localStorage.setItem('playurl-' + playurl.cid, JSON.stringify(playurl));
             }
         } catch (e) {
@@ -268,12 +303,13 @@
             }
         }, 200);
     }
-    window.checkPlayurlIntervalId = setInterval(()=>{expiredPlayurlChecker()}, 10*60*1000);
+    window.checkPlayurlIntervalId = setInterval(()=>{expiredPlayurlChecker()}, 600*1000);
 
     const interceptPlayurl = (r) => {
-        console.log(r);
-        const playurl = r.data?.playurl_info?.playurl
+        const playurl = r.data?.playurl_info?.playurl;
+        cachePlayUrl(playurl);
         if (!playurl) return r;
+        console.debug('playinfo', r);
         if (!isChecked('force-raw')) return r;
         expiredPlayurlChecker();
         const cachedUrl = JSON.parse(localStorage.getItem('playurl-' + playurl.cid));
@@ -285,17 +321,16 @@
     const origFetch = window.fetch;
     window.fetch = async function() {
         let url = arguments[0];
-        if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo') && isChecked('force-flv')) {
+        if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo') && isChecked('force-flv', true)) {
             url = url.replace(/protocol=0,[^&]+/, 'protocol=0');
             url = url.replace(/codec=0,[^&]+/, 'codec=0');
             arguments[0] = url;
-            console.log('fetch request', arguments);
+            console.debug('fetch request', arguments);
             const response = await origFetch.apply(this, arguments);
-            cachePlayUrl((await response.clone().json()).data?.playurl_info?.playurl)
-            const r = await response.clone().json()
-            response.json = async () => { return interceptPlayurl(r) }
+            const r = interceptPlayurl(await response.clone().json())
+            response.json = async () => { return r }
             return response;
-        } else if (url.match('api.live.bilibili.com/live/getRoundPlayVideo') && isChecked('block-roundplay')) {
+        } else if (url.match('api.live.bilibili.com/live/getRoundPlayVideo') && isChecked('block-roundplay', true)) {
             const response = await origFetch.apply(this, arguments);
             response.json = async () => ({"code":0,"data":{"cid":-3}})
             return response
@@ -321,47 +356,20 @@
     }
 
     const xhrAccessor = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, 'responseText');
-        Object.defineProperty(XMLHttpRequest.prototype, 'responseText', {
-            get: function() {
-                if (this.responseURL.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
-                    cacheRoomInit(JSON.parse(xhrAccessor.get.call(this)))
-                }
-                return xhrAccessor.get.call(this);
-            },
-            set: function(str) {
-                return xhrAccessor.set.call(this, str);
-            },
-            configurable: true
-        });
-
-    const getStoredValue = (key) => {
-        const defaultValues = {
-            'auto-reload': true,
-            'force-flv': true,
-            'prevent-pause': false,
-            'force-raw': false,
-            'auto-quality': true,
-            'block-roundplay': false,
-            'buffer-threshold': 1.5,
-        };
-        try {
-            const value = JSON.parse(localStorage.getItem(key));
-            if (value !== null) return value;
-            return defaultValues[key];
-        } catch {
-            return defaultValues[key];
-        }
-    }
-
-    const getPlayUrl = (room_id) => {
-        const request = new XMLHttpRequest();
-        console.log('request playurl')
-        request.open('GET', "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=" + room_id + "&protocol=0&format=0,1,2&codec=0&qn=10000&platform=web", false);
-        request.send(null);
-        if (request.status === 200) {
-            return JSON.parse(request.responseText).data?.playurl_info?.playurl
-        }
-    }
+    Object.defineProperty(XMLHttpRequest.prototype, 'responseText', {
+        get: function() {
+            if (this.responseURL.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
+                const rsp = JSON.parse(xhrAccessor.get.call(this));
+                cacheRoomInit(rsp);
+                cachePlayUrl(rsp.data?.playurl_info?.playurl);
+            }
+            return xhrAccessor.get.call(this);
+        },
+        set: function(str) {
+            return xhrAccessor.set.call(this, str);
+        },
+        configurable: true
+    });
 
     Object.defineProperty(window, '__NEPTUNE_IS_MY_WAIFU__', {
         get: function() { return this._init_data_neptune },
@@ -384,20 +392,20 @@
                         })
                     });
                 }
-                cachePlayUrl(playurl);
-                if (getStoredValue('force-raw')) {
-                    expiredPlayurlChecker();
-                    const cachedUrl = JSON.parse(localStorage.getItem('playurl-' + playurl.cid));
-                    if (cachedUrl) newdata.roomInitRes.data.playurl_info.playurl = cachedUrl;
-                }
+            }
+            if (newdata.roomInitRes) {
+                newdata.roomInitRes = interceptPlayurl(newdata.roomInitRes);
             }
             this._init_data_neptune = newdata;
-            console.log(newdata)
+            console.debug(newdata)
         }
     });
 
+
+    // ----------------------- 选项UI -----------------------
+
     window.saveConfig = () => {
-        console.log('config changed');
+        console.debug('config changed');
         Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=checkbox]')).forEach( e => {
             if (e.id === "hide_stats") return;
             localStorage.setItem(e.id, e.checked);
@@ -457,12 +465,14 @@
             '<label for="auto-quality">自动原画</label><input type="checkbox" id="auto-quality" onchange="saveConfig()">' +
             '<label for="block-roundplay">阻止轮播</label><input type="checkbox" id="block-roundplay" onchange="saveConfig()">' +
             '<br>' +
-            '<button id="copy-playurl" type="button" class="control-btn" onclick="copyPlayurl()">复制链接</button> ' +
-            '<button id="set-playurl" type="button" class="control-btn" onclick="setPlayurl()">设置链接!</button> ' +
+            '<button id="copy-playurl" type="button" onclick="copyPlayurl()">复制链接</button> ' +
+            '<button id="set-playurl" type="button" onclick="setPlayurl()">设置链接!</button> ' +
             '<label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" onchange="saveConfig()" step="0.1" style="width: 3em;">' +
-            '<style>.control-btn { width:5em;padding:1px;background: transparent;text-shadow: 1px 0 4px white; }</style>'
+            '<style>#seeker-control-panel button { width:5.5em;padding:1px;background: transparent; border: 1.5px solid #999; border-radius: 4px; color: #999; filter: contrast(0.5);} ' +
+            '#seeker-control-panel button:hover { filter: none; }' +
+            '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.5);} #seeker-control-panel input { vertical-align: middle; margin:1px; } </style>'
         );
-        e.style = 'text-shadow: 1px 0 4px white;text-align: right;';
+        e.style = 'text-align: right;';
         e.id = 'seeker-control-panel';
         document.querySelector('#head-info-vm .right-ctnr .p-relative').appendChild(e);
         document.querySelector('#hide_stats').onchange = (e) => {
@@ -486,6 +496,10 @@
                 Array.prototype.filter.call(document.querySelector('.web-player-video-info-panel').querySelectorAll('div'), i=>i.innerText==='[x]').forEach(i=>{i.style.removeProperty('display')});
             }
         }
+
+        Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel label, #seeker-control-panel button')).forEach( e => {
+            e.className += ' live-skin-normal-a-text';
+        })
 
         Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=checkbox]')).forEach( e => {
             if (e.id === "hide_stats") return;
