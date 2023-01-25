@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.1
+// @version      0.6.2
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -106,7 +106,7 @@
             }
             if (getVideoElement()?.playbackRate > 1) window.resetRate();
         } catch(e) {
-            console.log(e)
+            console.error(e)
         }
     }
 
@@ -130,7 +130,7 @@
             }
             if (getVideoElement()?.playbackRate < 1) window.resetRate();
         } catch(e) {
-            console.log(e)
+            console.error(e)
         }
     }
     window.speedUpIntervalId = setInterval(()=>{adjustSpeedup()}, 1000)
@@ -287,7 +287,7 @@
                 localStorage.setItem('playurl-' + playurl.cid, JSON.stringify(playurl));
             }
         } catch (e) {
-            console.log(e);
+            console.error(e);
         }
     }
 
@@ -433,7 +433,7 @@
         setTimeout(()=>{e.innerText = '复制链接'}, 1000);
     }
     window.setPlayurl = () => {
-        const value = prompt("请输入playurl json字符串\n如出错请取消勾选强制原画；留空点击确定清除当前直播间设置");
+        const value = prompt("请输入playurl json字符串或带query string的完整flv网址\n如出错请取消勾选强制原画；留空点击确定清除当前直播间设置");
         if (value === null) return;
         const room_id = getRoomId();
         if (value === "") {
@@ -441,14 +441,35 @@
             expiredPlayurlChecker();
         } else {
             try {
-                const data = JSON.parse(value);
+                let data;
+                if (value.match(/^(https:\/\/[^\/]+)(\/live-bvc\/\d+\/live_[^\/]+flv\?)(expires=\d+.*)/)) {
+                    const m = value.match(/^(https:\/\/[^\/]+)(\/live-bvc\/\d+\/live_[^\/]+flv\?)(expires=\d+.*)/);
+                    data = getPlayUrl(getRoomId());
+                    data.stream.forEach( i => {
+                        i.format.forEach( j => {
+                            j.codec.forEach( k => {
+                                k.base_url = m[2];
+                                k.url_info.forEach( u => {
+                                    u.extra = m[3];
+                                    u.host = m[1];
+                                })
+                                k.url_info = [k.url_info[0]];
+                            })
+                        })
+                    });
+                    console.debug('parsed stream url to playurl', data);
+                } else {
+                    console.debug('parsing playurl as json', value);
+                    data = JSON.parse(value);
+                }
                 if (data.cid !== room_id) {
                     if (!confirm("json的房间号"+data.cid+"可能不符，是否依然为当前房间"+room_id+"设置？")) return
                 }
                 localStorage.setItem('playurl-' + room_id, JSON.stringify(data));
                 expiredPlayurlChecker();
             } catch (e){
-                alert('json字符串解析失败\n'+e);
+                alert('json字符串/flv链接解析失败\n'+e);
+                console.error(e);
             }
         }
     }
