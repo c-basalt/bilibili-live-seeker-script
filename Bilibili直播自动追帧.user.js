@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.2
+// @version      0.6.3
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -77,6 +77,13 @@
     }
 
     const getThres = () => {
+        const thresNew = getValue('buffer-threshold');
+        const thresOld = _getThres();
+        if (thresNew !== thresOld) console.debug('different thresholds', thresNew, thresOld);
+        return thresOld;
+    }
+
+    const _getThres = () => {
         const e = document.querySelector('#buffer-threshold');
         if (!e) return null
         const value = Number(e.value)
@@ -141,6 +148,7 @@
 
     const getStoredValue = (key) => {
         const defaultValues = {
+            'hide-stats': false,
             'auto-reload': true,
             'force-flv': true,
             'prevent-pause': false,
@@ -148,6 +156,8 @@
             'auto-quality': true,
             'block-roundplay': false,
             'buffer-threshold': 1.5,
+            'AV-resync-step': 0.05,
+            'AV-resync-interval': 300,
         };
         try {
             const value = JSON.parse(localStorage.getItem(key));
@@ -157,10 +167,18 @@
             return defaultValues[key];
         }
     }
-    const isChecked = (i, fallback) => {
-        const e = document.querySelector('#'+i);
-        if (!e && fallback) return getStoredValue(i);
-        return e?.checked;
+    const isChecked = (key, fallback) => {
+        const e = document.querySelector('#'+key);
+        if (e && (typeof e?.checked === 'boolean')) return e.checked;
+        if (fallback) return getStoredValue(key);
+        return null;
+    }
+    const getValue = (key, fallback) => {
+        const e = document.querySelector('#'+key);
+        const value = Number(e?.value);
+        if (!Number.isNaN(value)) return value;
+        if (fallback) return getStoredValue(key);
+        return null;
     }
     const isLiveStream = () => {
         const e = document.querySelector('.live-status');
@@ -174,6 +192,25 @@
     const getRoomId = () => {
         if (!window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id) getRoomInit();
         return window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id || Number(location.href.match(/\/(\d+)/)[1]);
+    }
+
+
+    // ----------------------- 音画同步重置 -----------------------
+
+    window.AVResync = () => {
+        console.debug("enforce AV sync")
+        const v = getVideoElement();
+        const step = getValue('AV-resync-step', true);
+        if (!v || step === null) return;
+        v.currentTime = v.currentTime + step;
+    }
+    const stopAutoResync = () => {
+        clearInterval(window.AVResyncIntervalId);
+    }
+    const startAutoResync = () => {
+        console.debug("start AV sync interval")
+        stopAutoResync();
+        window.AVResyncIntervalId = setInterval(()=>{ window.AVResync() }, getValue("AV-resync-interval", true)*1000);
     }
 
 
@@ -414,11 +451,12 @@
     window.saveConfig = () => {
         console.debug('config changed');
         Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=checkbox]')).forEach( e => {
-            if (e.id === "hide_stats") return;
+            if (e.id === "auto-AV-sync") return;
             localStorage.setItem(e.id, e.checked);
-        })
-        const e = document.querySelector('#buffer-threshold');
-        if (e) localStorage.setItem('buffer-threshold', e.value);
+        });
+        Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=number]')).forEach( e => {
+            localStorage.setItem(e.id, e.value);
+        });
     }
     window.copyPlayurl = () => {
         const room_id = getRoomId();
@@ -484,7 +522,8 @@
     waitForElement(()=>document.querySelector('#head-info-vm .right-ctnr .p-relative'), () => {
         const e = document.createElement("span");
         e.innerHTML = (
-            '<label for="hide_stats">隐藏统计</label><input type="checkbox" id="hide_stats">' +
+            '<button id="reset-AV-sync" type="button" onclick="AVResync()" style="width:7em">重置音画同步</button><input type="checkbox" id="auto-AV-sync">' +
+            '<label for="hide-stats">隐藏统计</label><input type="checkbox" id="hide-stats">' +
             '<label for="prevent-pause">避免暂停</label><input type="checkbox" id="prevent-pause" onchange="saveConfig()">' +
             '<label for="auto-reload">自动刷新</label><input type="checkbox" id="auto-reload" onchange="saveConfig()">' +
             '<br>' +
@@ -496,6 +535,10 @@
             '<button id="copy-playurl" type="button" onclick="copyPlayurl()">复制链接</button>' +
             '<button id="set-playurl" type="button" onclick="setPlayurl()">设置链接!</button>' +
             '<label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" onchange="saveConfig()" step="0.1" style="width: 3em;">' +
+            '<span id="AV-resync-settings" style="display: none">' +
+            '<label for="AV-resync-step">重置步进</label><input type="number" id="AV-resync-step" onchange="saveConfig()" step="0.01" style="width: 3.5em;">' +
+            '<label for="AV-resync-interval">重置间隔</label><input type="number" id="AV-resync-interval" onchange="saveConfig()" step="1" style="width: 3.5em;">' +
+            '</span>' +
             '<style>#seeker-control-panel button { width:5.5em;padding:1px;background: transparent; border: 1.5px solid #999; border-radius: 4px; color: #999; filter: contrast(0.6);}' +
             '#seeker-control-panel button:hover { filter: none; } #seeker-control-panel button:active { filter: none; transform: translate(0.3px, 0.3px); }' +
             '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.6);} #seeker-control-panel input { vertical-align: middle; margin:1px; }</style>'
@@ -503,7 +546,8 @@
         e.style = 'text-align: right;';
         e.id = 'seeker-control-panel';
         document.querySelector('#head-info-vm .right-ctnr .p-relative').appendChild(e);
-        document.querySelector('#hide_stats').onchange = (e) => {
+        document.querySelector('#hide-stats').onchange = (e) => {
+            window.saveConfig();
             if (!document.querySelector('.web-player-video-info-panel')) {
                 e.target.checked = false
                 return
@@ -525,15 +569,32 @@
             }
         }
 
+        document.querySelector('#auto-AV-sync').onchange = (e) => {
+            if (e.target.checked) {
+                startAutoResync();
+                document.querySelector('#AV-resync-settings').style = "";
+            } else {
+                stopAutoResync();
+                document.querySelector('#AV-resync-settings').style = "display: none";
+            }
+        }
+        document.querySelector('#AV-resync-interval').onchange = (e) => {
+            startAutoResync();
+            window.saveConfig();
+        }
+
         Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel label, #seeker-control-panel button')).forEach( e => {
             e.className += ' live-skin-normal-a-text';
         })
 
         Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=checkbox]')).forEach( e => {
-            if (e.id === "hide_stats") return;
+            if (e.id === "hide-stats") return (getStoredValue(e.id) && setTimeout(()=>{e.click()}, 100));
+            if (e.id === "auto-AV-sync") return;
             e.checked = getStoredValue(e.id);
         })
-        document.querySelector('#buffer-threshold').value = getStoredValue('buffer-threshold');
+        Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=number]')).forEach( e => {
+            e.value = getStoredValue(e.id);
+        })
         expiredPlayurlChecker();
     })
 
