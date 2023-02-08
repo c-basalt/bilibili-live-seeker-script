@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.3
+// @version      0.6.4
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -513,13 +513,14 @@
     }
 
     const waitForElement = (checker, exec) => {
-        if (checker()) {
-            exec();
+        const node = checker();
+        if (node) {
+            exec(node);
         } else {
             setTimeout(() => waitForElement(checker, exec), 100);
         }
     }
-    waitForElement(()=>document.querySelector('#head-info-vm .right-ctnr .p-relative'), () => {
+    waitForElement(()=>document.querySelector('#head-info-vm .right-ctnr .p-relative'), (node) => {
         const e = document.createElement("span");
         e.innerHTML = (
             '<button id="reset-AV-sync" type="button" onclick="AVResync()" style="width:7em">重置音画同步</button><input type="checkbox" id="auto-AV-sync">' +
@@ -545,7 +546,7 @@
         );
         e.style = 'text-align: right;';
         e.id = 'seeker-control-panel';
-        document.querySelector('#head-info-vm .right-ctnr .p-relative').appendChild(e);
+        node.appendChild(e);
         document.querySelector('#hide-stats').onchange = (e) => {
             window.saveConfig();
             if (!document.querySelector('.web-player-video-info-panel')) {
@@ -596,6 +597,29 @@
             e.value = getStoredValue(e.id);
         })
         expiredPlayurlChecker();
+    })
+
+    const updatePanelHideState = () => {
+        if (getStoredValue('hide-seeker-control-panel')) {
+            waitForElement(()=>document.querySelector('#seeker-control-panel'), node => {node.style.display = 'none';});
+            waitForElement(()=>document.querySelector('#control-panel-showhide span'), node => {node.innerText = '显示追帧';});
+        } else {
+            waitForElement(()=>document.querySelector('#seeker-control-panel'), node => {node.style.display = '';});
+            waitForElement(()=>document.querySelector('#control-panel-showhide span'), node => {node.innerText = '隐藏追帧';});
+        }
+    }
+
+    waitForElement(()=>document.querySelector('#head-info-vm .upper-row .right-ctnr'), (node) => {
+        const e = document.createElement("div");
+        e.id = 'control-panel-showhide';
+        e.className = "icon-ctnr live-skin-normal-a-text pointer";
+        e.innerHTML = '<i class="v-middle icon-font icon-danmu-a" style="margin-left:16px; font-size:16px;"></i><span class="action-text v-middle" style="margin-left:8px; font-size:12px;"></span>';
+        e.onclick = () => {
+            localStorage.setItem('hide-seeker-control-panel', !getStoredValue('hide-seeker-control-panel'));
+            updatePanelHideState();
+        }
+        node.appendChild(e);
+        updatePanelHideState();
     })
 
 })();
