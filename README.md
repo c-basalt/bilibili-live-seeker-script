@@ -12,6 +12,9 @@ https://greasyfork.org/zh-CN/scripts/453967
 
 ## 次要功能
 
+
+- 0.6.6
+    - 自定义API：可以自定义获取playurl所用的API endpoint：https://github.com/c-basalt/bilibili-live-seeker-script/issues/1
 - 0.6.3
     - 重置音画同步：（实验）让音视频重新定位来尝试重置音视频的不同步，并提供定时自动重置
 - 0.6.2
