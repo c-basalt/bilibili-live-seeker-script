@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.4
+// @version      0.6.6
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -52,7 +52,7 @@
         const e = document.querySelector('#p-video-info-bufferLength');
         if (!e) return null;
         if (document.querySelector('.web-player-video-info-panel').style.display === 'none') return null;
-        const match = e.innerText.match(/:\s*([\d\.]+)s/);
+        const match = e.innerText.match(/Buffer Length:\s*([\d\.]+)s/);
         if (!match) return null;
         return Number(match[1]);
     }
@@ -368,6 +368,12 @@
                 url = url.replace(/protocol=0,[^&]+/, 'protocol=0');
                 url = url.replace(/codec=0,[^&]+/, 'codec=0');
             }
+            if (localStorage.getItem('playurl-custom-endpoint')) {
+                url = url.replace(/^\/\//, 'https://');
+                url = url.replace('https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo', localStorage.getItem('playurl-custom-endpoint'));
+                arguments[1] && (arguments[1].credentials = 'omit');
+                console.debug('replacing API endpoint', url, arguments[1]);
+            }
             arguments[0] = url;
             console.debug('fetch request', arguments);
             const response = await origFetch.apply(this, arguments);
@@ -394,6 +400,10 @@
                 url = url.replace(/protocol=0,[^&]+/, 'protocol=0');
                 url = url.replace(/codec=0,[^&]+/, 'codec=0');
             }
+            if (localStorage.getItem('playurl-custom-endpoint')) {
+                url = url.replace('https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo', localStorage.getItem('playurl-custom-endpoint'));
+                console.debug('replacing API endpoint', url);
+            }
             arguments[1] = url;
         }
         return origOpen.apply(this, arguments);
@@ -402,7 +412,7 @@
     const xhrAccessor = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, 'responseText');
     Object.defineProperty(XMLHttpRequest.prototype, 'responseText', {
         get: function() {
-            if (this.responseURL.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
+            if (this.responseURL.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo') || this.responseURL.match(localStorage.getItem('playurl-custom-endpoint'))) {
                 const rsp = JSON.parse(xhrAccessor.get.call(this));
                 cacheRoomInit(rsp);
                 return JSON.stringify(interceptPlayurl(rsp));
@@ -511,6 +521,15 @@
             }
         }
     }
+    window.setEndpoint = () => {
+        const value = prompt("请输入获取playurl所用的自定义API endpoint，用以替换默认的`https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo`\n如出错请留空点击确定恢复默认API");
+        if (value === null) return;
+        if (value === "") {
+            localStorage.removeItem('playurl-custom-endpoint');
+        } else {
+            localStorage.setItem('playurl-custom-endpoint', value);
+        }
+    }
 
     const waitForElement = (checker, exec) => {
         const node = checker();
@@ -533,8 +552,12 @@
             '<label for="auto-quality">自动原画</label><input type="checkbox" id="auto-quality" onchange="saveConfig()">' +
             '<label for="block-roundplay">阻止轮播</label><input type="checkbox" id="block-roundplay" onchange="saveConfig()">' +
             '<br>' +
+            '<button id="playurl-config-showhide" type="button" style="width: 7em">展开链接选项</button>' +
+            '<span id="playurl-buttons" style="display: none">' +
             '<button id="copy-playurl" type="button" onclick="copyPlayurl()">复制链接</button>' +
             '<button id="set-playurl" type="button" onclick="setPlayurl()">设置链接!</button>' +
+            '<button id="set-endpoint" type="button" onclick="setEndpoint()">设置API !</button>' +
+            '</span>' +
             '<label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" onchange="saveConfig()" step="0.1" style="width: 3em;">' +
             '<span id="AV-resync-settings" style="display: none">' +
             '<label for="AV-resync-step">重置步进</label><input type="number" id="AV-resync-step" onchange="saveConfig()" step="0.01" style="width: 3.5em;">' +
@@ -570,6 +593,11 @@
             }
         }
 
+        document.querySelector('#playurl-config-showhide').onclick = (e) => {
+            const span = document.querySelector('#playurl-buttons');
+            span.style.display = "";
+            e.target.style.display = "none";
+        }
         document.querySelector('#auto-AV-sync').onchange = (e) => {
             if (e.target.checked) {
                 startAutoResync();
@@ -606,6 +634,8 @@
         } else {
             waitForElement(()=>document.querySelector('#seeker-control-panel'), node => {node.style.display = '';});
             waitForElement(()=>document.querySelector('#control-panel-showhide span'), node => {node.innerText = '隐藏追帧';});
+            waitForElement(()=>document.querySelector('#playurl-config-showhide'), node => {node.style.display = '';});
+            waitForElement(()=>document.querySelector('#playurl-buttons'), node => {node.style.display = 'none';});
         }
     }
 
