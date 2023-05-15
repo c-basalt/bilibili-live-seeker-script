@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.6
+// @version      0.6.7
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -28,12 +28,14 @@
     }
 
     const updatePlaybackRateDisplay = () => {
-        const e = document.querySelector('.live-status');
+        const e = document.querySelector('.room-owner-username');
         const v = getVideoElement();
         if (!e || !v) {
             setTimeout(updatePlaybackRateDisplay, 100);
         } else {
-            e.innerText = e.innerText.match(/^[^@\d]+/) + '@' + v.playbackRate.toFixed(2)
+            e.style.maxWidth = 'fit-content';
+            e.style.lineHeight = 'normal';
+            e.innerText = e.innerText.match(/^([^@\d]+)(\s|$)/)[1] + '　@' + v.playbackRate.toFixed(2)
         }
     }
 
@@ -181,6 +183,7 @@
         return null;
     }
     const isLiveStream = () => {
+        return true;
         const e = document.querySelector('.live-status');
         if (!e) return undefined;
         if (e.innerText.match(/^直播/)) {
@@ -539,7 +542,7 @@
             setTimeout(() => waitForElement(checker, exec), 100);
         }
     }
-    waitForElement(()=>document.querySelector('#head-info-vm .right-ctnr .p-relative'), (node) => {
+    waitForElement(()=>document.querySelector('#head-info-vm .lower-row .right-ctnr'), (node) => {
         const e = document.createElement("span");
         e.innerHTML = (
             '<button id="reset-AV-sync" type="button" onclick="AVResync()" style="width:7em">重置音画同步</button><input type="checkbox" id="auto-AV-sync">' +
@@ -631,11 +634,13 @@
         if (getStoredValue('hide-seeker-control-panel')) {
             waitForElement(()=>document.querySelector('#seeker-control-panel'), node => {node.style.display = 'none';});
             waitForElement(()=>document.querySelector('#control-panel-showhide span'), node => {node.innerText = '显示追帧';});
+            waitForElement(()=>document.querySelector('#head-info-vm .lower-row'), node => {node.style.marginTop = '';});
         } else {
             waitForElement(()=>document.querySelector('#seeker-control-panel'), node => {node.style.display = '';});
             waitForElement(()=>document.querySelector('#control-panel-showhide span'), node => {node.innerText = '隐藏追帧';});
             waitForElement(()=>document.querySelector('#playurl-config-showhide'), node => {node.style.display = '';});
             waitForElement(()=>document.querySelector('#playurl-buttons'), node => {node.style.display = 'none';});
+            waitForElement(()=>document.querySelector('#head-info-vm .lower-row'), node => {node.style.marginTop = '0px';});
         }
     }
 
