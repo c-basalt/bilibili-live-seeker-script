@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.7
+// @version      0.6.8
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -534,15 +534,20 @@
         }
     }
 
-    const waitForElement = (checker, exec) => {
+    const waitForElement = (checker, exec, timeout) => {
         const node = checker();
         if (node) {
             exec(node);
         } else {
-            setTimeout(() => waitForElement(checker, exec), 100);
+            if (timeout !== undefined) {
+                timeout -= 100;
+                if (timeout > 0) setTimeout(() => waitForElement(checker, exec, timeout), 100);
+            } else {
+                setTimeout(() => waitForElement(checker, exec), 100);
+            }
         }
     }
-    waitForElement(()=>document.querySelector('#head-info-vm .lower-row .right-ctnr'), (node) => {
+    waitForElement(()=>document.querySelector('#head-info-vm .lower-row'), (node) => {
         const e = document.createElement("span");
         e.innerHTML = (
             '<button id="reset-AV-sync" type="button" onclick="AVResync()" style="width:7em">重置音画同步</button><input type="checkbox" id="auto-AV-sync">' +
@@ -570,7 +575,7 @@
             '#seeker-control-panel button:hover { filter: none; } #seeker-control-panel button:active { filter: none; transform: translate(0.3px, 0.3px); }' +
             '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.6);} #seeker-control-panel input { vertical-align: middle; margin:1px; }</style>'
         );
-        e.style = 'text-align: right;';
+        e.style = 'text-align: right; flex: 0 0 fit-content; margin-left: 5px;';
         e.id = 'seeker-control-panel';
         node.appendChild(e);
         document.querySelector('#hide-stats').onchange = (e) => {
@@ -630,17 +635,42 @@
         expiredPlayurlChecker();
     })
 
+    waitForElement(()=>document.querySelector('#head-info-vm .lower-row .right-ctnr'), node => {
+        const getBottom = (e) => { const rect = e.getBoundingClientRect(); return rect.y + rect.height; }
+        const getTop = (e) => { const rect = e.getBoundingClientRect(); return rect.y }
+        const observer = new ResizeObserver((entries) => {
+            if (getTop(node.children[node.children.length-1]) >= getBottom(node.children[0])) {
+                node.style.marginTop = '-20px';
+            } else {
+                node.style.marginTop = '';
+            }
+        });
+        observer.observe(node);
+    });
+
     const updatePanelHideState = () => {
         if (getStoredValue('hide-seeker-control-panel')) {
             waitForElement(()=>document.querySelector('#seeker-control-panel'), node => {node.style.display = 'none';});
             waitForElement(()=>document.querySelector('#control-panel-showhide span'), node => {node.innerText = '显示追帧';});
+            waitForElement(()=>document.querySelector('#head-info-vm .upper-row'), node => {node.style.marginTop = '';});
             waitForElement(()=>document.querySelector('#head-info-vm .lower-row'), node => {node.style.marginTop = '';});
+            waitForElement(()=>document.querySelector('#head-info-vm .lower-row .right-ctnr'), node => {node.style.flex = ''; node.style.flexWrap = ''; node.style.placeContent = ''; node.style.alignItems = ''; node.style.rowGap = '';});
+
+            waitForElement(()=>document.querySelector('#head-info-vm .lower-row .pk-act-left-distance'), node => {node.style.maxWidth = '';}, 15000);
+            waitForElement(()=>document.querySelector('#head-info-vm .lower-row .act-left-distance'), node => {node.style.maxWidth = '';}, 15000);
+            waitForElement(()=>document.querySelector('#head-info-vm .lower-row .gift-planet-entry'), node => {node.style.marginLeft = '';}, 15000);
         } else {
             waitForElement(()=>document.querySelector('#seeker-control-panel'), node => {node.style.display = '';});
             waitForElement(()=>document.querySelector('#control-panel-showhide span'), node => {node.innerText = '隐藏追帧';});
             waitForElement(()=>document.querySelector('#playurl-config-showhide'), node => {node.style.display = '';});
             waitForElement(()=>document.querySelector('#playurl-buttons'), node => {node.style.display = 'none';});
+            waitForElement(()=>document.querySelector('#head-info-vm .upper-row'), node => {node.style.marginTop = '-5px';});
             waitForElement(()=>document.querySelector('#head-info-vm .lower-row'), node => {node.style.marginTop = '0px';});
+            waitForElement(()=>document.querySelector('#head-info-vm .lower-row .right-ctnr'), node => { node.style.flex = ' 0 1 auto'; node.style.flexWrap = 'wrap'; node.style.placeContent = 'space-around center'; node.style.alignItems = 'flex-end'; node.style.rowGap = '5px';});
+
+            waitForElement(()=>document.querySelector('#head-info-vm .lower-row .pk-act-left-distance'), node => {node.style.maxWidth = '3px';}, 15000);
+            waitForElement(()=>document.querySelector('#head-info-vm .lower-row .act-left-distance'), node => {node.style.maxWidth = '3px';}, 15000);
+            waitForElement(()=>document.querySelector('#head-info-vm .lower-row .gift-planet-entry'), node => {node.style.marginLeft = '5px';}, 15000);
         }
     }
 
