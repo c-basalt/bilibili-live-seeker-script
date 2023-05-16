@@ -182,6 +182,11 @@
         if (fallback) return getStoredValue(key);
         return null;
     }
+    /*const isLiveStream = () => {
+        const ret = _isLiveStream();
+        console.log('live status', ret);
+        return ret;
+    }*/
     const isLiveStream = () => {
         if (document.querySelector('.web-player-round-title')?.innerText) return false; // 轮播
         if (document.querySelector('.web-player-ending-panel')?.innerText) return false; // 闲置或轮播阻断
@@ -638,8 +643,10 @@
         const observer = new ResizeObserver((entries) => {
             if (getTop(node.children[node.children.length-1]) >= getBottom(node.children[0])) {
                 node.style.marginTop = '-20px';
+                node.style.alignItems = 'flex-end';
             } else {
                 node.style.marginTop = '';
+                node.style.alignItems = '';
             }
         });
         observer.observe(node);
@@ -651,7 +658,7 @@
             waitForElement(()=>document.querySelector('#control-panel-showhide span'), node => {node.innerText = '显示追帧';});
             waitForElement(()=>document.querySelector('#head-info-vm .upper-row'), node => {node.style.marginTop = '';});
             waitForElement(()=>document.querySelector('#head-info-vm .lower-row'), node => {node.style.marginTop = '';});
-            waitForElement(()=>document.querySelector('#head-info-vm .lower-row .right-ctnr'), node => {node.style.flex = ''; node.style.flexWrap = ''; node.style.placeContent = ''; node.style.alignItems = ''; node.style.rowGap = '';});
+            waitForElement(()=>document.querySelector('#head-info-vm .lower-row .right-ctnr'), node => {node.style.flex = ''; node.style.flexWrap = ''; node.style.placeContent = ''; node.style.rowGap = '';});
 
             waitForElement(()=>document.querySelector('#head-info-vm .lower-row .pk-act-left-distance'), node => {node.style.maxWidth = '';}, 15000);
             waitForElement(()=>document.querySelector('#head-info-vm .lower-row .act-left-distance'), node => {node.style.maxWidth = '';}, 15000);
@@ -663,7 +670,7 @@
             waitForElement(()=>document.querySelector('#playurl-buttons'), node => {node.style.display = 'none';});
             waitForElement(()=>document.querySelector('#head-info-vm .upper-row'), node => {node.style.marginTop = '-5px';});
             waitForElement(()=>document.querySelector('#head-info-vm .lower-row'), node => {node.style.marginTop = '0px';});
-            waitForElement(()=>document.querySelector('#head-info-vm .lower-row .right-ctnr'), node => { node.style.flex = ' 0 1 auto'; node.style.flexWrap = 'wrap'; node.style.placeContent = 'space-around center'; node.style.alignItems = 'flex-end'; node.style.rowGap = '5px';});
+            waitForElement(()=>document.querySelector('#head-info-vm .lower-row .right-ctnr'), node => { node.style.flex = ' 0 1 auto'; node.style.flexWrap = 'wrap'; node.style.placeContent = 'space-around center'; node.style.rowGap = '5px';});
 
             waitForElement(()=>document.querySelector('#head-info-vm .lower-row .pk-act-left-distance'), node => {node.style.maxWidth = '3px';}, 15000);
             waitForElement(()=>document.querySelector('#head-info-vm .lower-row .act-left-distance'), node => {node.style.maxWidth = '3px';}, 15000);
