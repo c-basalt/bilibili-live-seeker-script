@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.8
+// @version      0.6.9
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -183,14 +183,11 @@
         return null;
     }
     const isLiveStream = () => {
-        return true;
-        const e = document.querySelector('.live-status');
-        if (!e) return undefined;
-        if (e.innerText.match(/^直播/)) {
-            return true;
-        } else {
-            return false;
-        }
+        if (document.querySelector('.web-player-round-title')?.innerText) return false; // 轮播
+        if (document.querySelector('.web-player-ending-panel')?.innerText) return false; // 闲置或轮播阻断
+        const e = document.querySelector('video');
+        if (!e) return undefined; // 网页加载
+        return true; // 直播
     }
     const getRoomId = () => {
         if (!window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id) getRoomInit();
