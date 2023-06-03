@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.9
+// @version      0.6.10
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -28,14 +28,25 @@
     }
 
     const updatePlaybackRateDisplay = () => {
-        const e = document.querySelector('.room-owner-username');
         const v = getVideoElement();
-        if (!e || !v) {
+        if (!v) {
             setTimeout(updatePlaybackRateDisplay, 100);
         } else {
-            e.style.maxWidth = 'fit-content';
-            e.style.lineHeight = 'normal';
-            e.innerText = e.innerText.match(/^([^@\d]+)(\s|$)/)[1] + '　@' + v.playbackRate.toFixed(2)
+            const usernameRate = document.querySelector('#playback-rate-username');
+            if (!usernameRate) {
+                const e = document.querySelector('.room-owner-username');
+                e.style.lineHeight = 'normal';
+                e.innerHTML = e.innerHTML.match(/^([^<]+)(<|$)/)[1] + '<span id="playback-rate-username">　@' + v.playbackRate.toFixed(2) + '</span>'
+            } else {
+                usernameRate.innerText = '　@' + v.playbackRate.toFixed(2);
+            }
+            const titleRate = document.querySelector('#playback-rate-title');
+            if (!titleRate) {
+                const e2 = document.querySelector('.live-title .text');
+                e2.innerHTML = e2.innerHTML.match(/^([^<]+)(<|$)/)[1] + '<br><span id="playback-rate-title" style="display:none">@' + v.playbackRate.toFixed(2) + '</span>'
+            } else {
+                titleRate.innerText = '@' + v.playbackRate.toFixed(2);
+            }
         }
     }
 
@@ -577,7 +588,7 @@
             '#seeker-control-panel button:hover { filter: none; } #seeker-control-panel button:active { filter: none; transform: translate(0.3px, 0.3px); }' +
             '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.6);} #seeker-control-panel input { vertical-align: middle; margin:1px; }</style>'
         );
-        e.style = 'text-align: right; flex: 0 0 fit-content; margin-left: 5px;';
+        e.style = 'text-align: right; flex: 0 0 fit-content; margin-left: 5px; margin-top: -5px;';
         e.id = 'seeker-control-panel';
         node.appendChild(e);
         document.querySelector('#hide-stats').onchange = (e) => {
@@ -641,12 +652,17 @@
         const getBottom = (e) => { const rect = e.getBoundingClientRect(); return rect.y + rect.height; }
         const getTop = (e) => { const rect = e.getBoundingClientRect(); return rect.y }
         const observer = new ResizeObserver((entries) => {
+            if (node.children.length <= 1) return;
             if (getTop(node.children[node.children.length-1]) >= getBottom(node.children[0])) {
                 node.style.marginTop = '-20px';
                 node.style.alignItems = 'flex-end';
+                document.querySelector('#playback-rate-username').style.display = 'none';
+                document.querySelector('#playback-rate-title').style.display = '';
             } else {
                 node.style.marginTop = '';
                 node.style.alignItems = '';
+                document.querySelector('#playback-rate-username').style.display = '';
+                document.querySelector('#playback-rate-title').style.display = 'none';
             }
         });
         observer.observe(node);
@@ -656,7 +672,7 @@
         if (getStoredValue('hide-seeker-control-panel')) {
             waitForElement(()=>document.querySelector('#seeker-control-panel'), node => {node.style.display = 'none';});
             waitForElement(()=>document.querySelector('#control-panel-showhide span'), node => {node.innerText = '显示追帧';});
-            waitForElement(()=>document.querySelector('#head-info-vm .upper-row'), node => {node.style.marginTop = '';});
+            waitForElement(()=>document.querySelector('#head-info-vm .upper-row .right-ctnr'), node => {node.style.marginTop = '';});
             waitForElement(()=>document.querySelector('#head-info-vm .lower-row'), node => {node.style.marginTop = '';});
             waitForElement(()=>document.querySelector('#head-info-vm .lower-row .right-ctnr'), node => {node.style.flex = ''; node.style.flexWrap = ''; node.style.placeContent = ''; node.style.rowGap = '';});
 
@@ -668,9 +684,9 @@
             waitForElement(()=>document.querySelector('#control-panel-showhide span'), node => {node.innerText = '隐藏追帧';});
             waitForElement(()=>document.querySelector('#playurl-config-showhide'), node => {node.style.display = '';});
             waitForElement(()=>document.querySelector('#playurl-buttons'), node => {node.style.display = 'none';});
-            waitForElement(()=>document.querySelector('#head-info-vm .upper-row'), node => {node.style.marginTop = '-5px';});
+            waitForElement(()=>document.querySelector('#head-info-vm .upper-row .right-ctnr'), node => {node.style.marginTop = '-7px';});
             waitForElement(()=>document.querySelector('#head-info-vm .lower-row'), node => {node.style.marginTop = '0px';});
-            waitForElement(()=>document.querySelector('#head-info-vm .lower-row .right-ctnr'), node => { node.style.flex = ' 0 1 auto'; node.style.flexWrap = 'wrap'; node.style.placeContent = 'space-around center'; node.style.rowGap = '5px';});
+            waitForElement(()=>document.querySelector('#head-info-vm .lower-row .right-ctnr'), node => { node.style.flex = '100 1 auto'; node.style.flexWrap = 'wrap'; node.style.placeContent = 'space-around center'; node.style.rowGap = '5px';});
 
             waitForElement(()=>document.querySelector('#head-info-vm .lower-row .pk-act-left-distance'), node => {node.style.maxWidth = '3px';}, 15000);
             waitForElement(()=>document.querySelector('#head-info-vm .lower-row .act-left-distance'), node => {node.style.maxWidth = '3px';}, 15000);
