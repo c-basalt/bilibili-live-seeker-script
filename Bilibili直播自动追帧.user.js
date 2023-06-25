@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.10
+// @version      0.6.11
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -255,7 +255,8 @@
                 setTimeout(()=>{offLiveAutoReload({lastChat: chatHistory})}, timeout)
             } else {
                 if (chatHistory === lastChat) {
-                    window.location.reload();
+                    document.querySelector('label[for="auto-reload"]').classList.add('danmaku-lost');
+                    setTimeout(()=>{window.location.reload();}, 5000);
                 } else {
                     console.debug('chat history changed');
                 }
@@ -273,27 +274,35 @@
                     // 0: 闲置，1: 直播，2: 轮播
                     if (timeout) {
                         setTimeout(()=>{checkIsLiveReload()}, timeout);
+                        document.querySelector('label[for="auto-reload"]').classList.add('live-on');
+                        return;
                     } else {
+                        document.querySelector('label[for="auto-reload"]').classList.add('reload');
                         window.location.reload();
                     }
                 }
             });
         }
+        document.querySelector('label[for="auto-reload"]').classList.remove('live-on');
     }
     const checkErrorReload = (timeout) => {
-        if (!isChecked('auto-reload')) return
+        if (!isChecked('auto-reload')) return;
         const error = document.querySelector('.web-player-error-panel');
         if (error) {
             if (timeout) {
                 setTimeout(()=>{checkErrorReload()}, timeout);
+                document.querySelector('label[for="auto-reload"]').classList.add('video-error');
+                return;
             } else {
+                document.querySelector('label[for="auto-reload"]').classList.add('reload');
                 window.location.reload();
             }
         }
+        document.querySelector('label[for="auto-reload"]').classList.remove('video-error');
     }
     window.offLiveReloadIntervalId = setInterval(()=>{offLiveAutoReload({timeout: 3600*1000})}, 600*1000);
     window.checkLiveReloadIntervalId = setInterval(()=>{checkIsLiveReload(10*1000)}, 300*1000);
-    window.checkErrorReloadIntervalId = setInterval(()=>{checkErrorReload(1000)}, 3000);
+    window.checkErrorReloadIntervalId = setInterval(()=>{checkErrorReload(2000)}, 3000);
 
 
     // ----------------------- 网络请求 -----------------------
@@ -586,7 +595,8 @@
             '</span>' +
             '<style>#seeker-control-panel button { width:5.5em;padding:1px;background: transparent; border: 1.5px solid #999; border-radius: 4px; color: #999; filter: contrast(0.6);}' +
             '#seeker-control-panel button:hover { filter: none; } #seeker-control-panel button:active { filter: none; transform: translate(0.3px, 0.3px); }' +
-            '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.6);} #seeker-control-panel input { vertical-align: middle; margin:1px; }</style>'
+            '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.6);} #seeker-control-panel input { vertical-align: middle; margin:1px; }' +
+            '#seeker-control-panel label.danmaku-lost, #seeker-control-panel label.live-on, #seeker-control-panel label.video-error, #seeker-control-panel label.reload { color: orange!important; filter: none; }</style>'
         );
         e.style = 'text-align: right; flex: 0 0 fit-content; margin-left: 5px; margin-top: -5px;';
         e.id = 'seeker-control-panel';
@@ -656,13 +666,13 @@
             if (getTop(node.children[node.children.length-1]) >= getBottom(node.children[0])) {
                 node.style.marginTop = '-20px';
                 node.style.alignItems = 'flex-end';
-                document.querySelector('#playback-rate-username').style.display = 'none';
-                document.querySelector('#playback-rate-title').style.display = '';
+                waitForElement(()=>document.querySelector('#playback-rate-username'), node => {node.style.display = 'none';}, 100);
+                waitForElement(()=>document.querySelector('#playback-rate-title'), node => {node.style.display = '';}, 100);
             } else {
                 node.style.marginTop = '';
                 node.style.alignItems = '';
-                document.querySelector('#playback-rate-username').style.display = '';
-                document.querySelector('#playback-rate-title').style.display = 'none';
+                waitForElement(()=>document.querySelector('#playback-rate-username'), node => {node.style.display = '';}, 100);
+                waitForElement(()=>document.querySelector('#playback-rate-title'), node => {node.style.display = 'none';}, 100);
             }
         });
         observer.observe(node);
