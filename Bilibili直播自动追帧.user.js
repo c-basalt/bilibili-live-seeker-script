@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.11
+// @version      0.6.12
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -130,17 +130,18 @@
         }
     }
 
-    const speeddownThres = [
-        [0.2, 0.1],
-        [0.3, 0.3],
-        [0.6, 0.6]
-    ]
     const adjustSpeeddown = () => {
         try {
             if (!isLiveStream()) return;
+            const slowDownChecked = isChecked('auto-slowdown');
+            if (!slowDownChecked) {
+                if (slowDownChecked === false && getVideoElement()?.playbackRate < 1) window.resetRate();
+                return;
+            }
             const bufferLen = window.bufferlen()
             if (bufferLen === null) return;
             let thres, rate;
+            const speeddownThres = getStoredValue('speeddown-thres');
             for (let i = 0; i < speeddownThres.length; i++) {
                 [thres, rate] = speeddownThres[i];
                 if (bufferLen < thres) {
@@ -153,7 +154,7 @@
             console.error(e)
         }
     }
-    window.speedUpIntervalId = setInterval(()=>{adjustSpeedup()}, 1000)
+    window.speedUpIntervalId = setInterval(()=>{adjustSpeedup()}, 300)
     window.speedDownIntervalId = setInterval(()=>{adjustSpeeddown()}, 50)
 
 
@@ -167,10 +168,12 @@
             'prevent-pause': false,
             'force-raw': false,
             'auto-quality': true,
+            'auto-slowdown': true,
             'block-roundplay': false,
             'buffer-threshold': 1.5,
             'AV-resync-step': 0.05,
             'AV-resync-interval': 300,
+            'speeddown-thres': [[0.2, 0.1],[0.3, 0.3],[0.6, 0.6]],
         };
         try {
             const value = JSON.parse(localStorage.getItem(key));
@@ -180,6 +183,7 @@
             return defaultValues[key];
         }
     }
+    window.getStoredValue = getStoredValue;
     const isChecked = (key, fallback) => {
         const e = document.querySelector('#'+key);
         if (e && (typeof e?.checked === 'boolean')) return e.checked;
@@ -193,11 +197,6 @@
         if (fallback) return getStoredValue(key);
         return null;
     }
-    /*const isLiveStream = () => {
-        const ret = _isLiveStream();
-        console.log('live status', ret);
-        return ret;
-    }*/
     const isLiveStream = () => {
         if (document.querySelector('.web-player-round-title')?.innerText) return false; // 轮播
         if (document.querySelector('.web-player-ending-panel')?.innerText) return false; // 闲置或轮播阻断
@@ -555,6 +554,22 @@
             localStorage.setItem('playurl-custom-endpoint', value);
         }
     }
+    window.setSlowdownThres = () => {
+        const storedThres = JSON.stringify(getStoredValue('speeddown-thres'));
+        const value = prompt("请输入想要设定的自动减速阈值\nJSON格式为[[缓冲长度(秒)，播放速率],...]\n留空点击确定以恢复默认值", storedThres);
+        if (value === null || value === storedThres) return;
+        if (value === "") {
+            localStorage.removeItem('speeddown-thres');
+        } else {
+            try {
+                const newThres = JSON.parse(value);
+                localStorage.setItem('speeddown-thres', JSON.stringify(newThres));
+            } catch (e) {
+                alert("设置失败\n" + e);
+                console.error(e);
+            }
+        }
+    }
 
     const waitForElement = (checker, exec, timeout) => {
         const node = checker();
@@ -572,6 +587,7 @@
     waitForElement(()=>document.querySelector('#head-info-vm .lower-row'), (node) => {
         const e = document.createElement("span");
         e.innerHTML = (
+            '<span id="basic-settings-page">' +
             '<button id="reset-AV-sync" type="button" onclick="AVResync()" style="width:7em">重置音画同步</button><input type="checkbox" id="auto-AV-sync">' +
             '<label for="hide-stats">隐藏统计</label><input type="checkbox" id="hide-stats">' +
             '<label for="prevent-pause">避免暂停</label><input type="checkbox" id="prevent-pause" onchange="saveConfig()">' +
@@ -582,17 +598,23 @@
             '<label for="auto-quality">自动原画</label><input type="checkbox" id="auto-quality" onchange="saveConfig()">' +
             '<label for="block-roundplay">阻止轮播</label><input type="checkbox" id="block-roundplay" onchange="saveConfig()">' +
             '<br>' +
-            '<button id="playurl-config-showhide" type="button" style="width: 7em">展开链接选项</button>' +
-            '<span id="playurl-buttons" style="display: none">' +
-            '<button id="copy-playurl" type="button" onclick="copyPlayurl()">复制链接</button>' +
-            '<button id="set-playurl" type="button" onclick="setPlayurl()">设置链接!</button>' +
-            '<button id="set-endpoint" type="button" onclick="setEndpoint()">设置API !</button>' +
-            '</span>' +
+            '<button id="go-to-adv-settings" type="button" style="width: 7em">转到高级选项</button>' +
             '<label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" onchange="saveConfig()" step="0.1" style="width: 3em;">' +
-            '<span id="AV-resync-settings" style="display: none">' +
-            '<label for="AV-resync-step">重置步进</label><input type="number" id="AV-resync-step" onchange="saveConfig()" step="0.01" style="width: 3.5em;">' +
-            '<label for="AV-resync-interval">重置间隔</label><input type="number" id="AV-resync-interval" onchange="saveConfig()" step="1" style="width: 3.5em;">' +
             '</span>' +
+
+            '<span id="adv-settings-page" style="display:none">' +
+            '<button id="copy-playurl" type="button" style="width: 7em" onclick="copyPlayurl()">复制推流链接</button>' +
+            '<button id="set-playurl" type="button" onclick="setPlayurl()">设置链接!</button>' +
+            '<button id="set-endpoint" type="button" style="width: 8em" onclick="setEndpoint()">设置视频流API !</button>' +
+            '<br>' +
+            '<button id="set-slowdown-thres" type="button" style="width: 7em" onclick="setSlowdownThres()">设置减速阈值</button>' +
+            '<label for="auto-slowdown">自动减速</label><input type="checkbox" id="auto-slowdown" onchange="saveConfig()">' +
+            '<br>' +
+            '<button id="go-to-basic-settings" type="button" style="width: 7em">转到普通选项</button>' +
+            '<label for="AV-resync-step">音画同步重置步进</label><input type="number" id="AV-resync-step" onchange="saveConfig()" step="0.01" style="width: 3.5em;">' +
+            '<label for="AV-resync-interval">间隔</label><input type="number" id="AV-resync-interval" onchange="saveConfig()" step="1" style="width: 3.5em;">' +
+            '</span>' +
+
             '<style>#seeker-control-panel button { width:5.5em;padding:1px;background: transparent; border: 1.5px solid #999; border-radius: 4px; color: #999; filter: contrast(0.6);}' +
             '#seeker-control-panel button:hover { filter: none; } #seeker-control-panel button:active { filter: none; transform: translate(0.3px, 0.3px); }' +
             '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.6);} #seeker-control-panel input { vertical-align: middle; margin:1px; }' +
@@ -623,19 +645,19 @@
                 Array.prototype.filter.call(document.querySelector('.web-player-video-info-panel').querySelectorAll('div'), i=>i.innerText==='[x]').forEach(i=>{i.style.removeProperty('display')});
             }
         }
-
-        document.querySelector('#playurl-config-showhide').onclick = (e) => {
-            const span = document.querySelector('#playurl-buttons');
-            span.style.display = "";
-            e.target.style.display = "none";
+        document.querySelector('#go-to-adv-settings').onclick = (e) => {
+            document.querySelector('#basic-settings-page').style.display = "none";
+            document.querySelector('#adv-settings-page').style.display = "";
+        }
+        document.querySelector('#go-to-basic-settings').onclick = (e) => {
+            document.querySelector('#basic-settings-page').style.display = "";
+            document.querySelector('#adv-settings-page').style.display = "none";
         }
         document.querySelector('#auto-AV-sync').onchange = (e) => {
             if (e.target.checked) {
                 startAutoResync();
-                document.querySelector('#AV-resync-settings').style = "";
             } else {
                 stopAutoResync();
-                document.querySelector('#AV-resync-settings').style = "display: none";
             }
         }
         document.querySelector('#AV-resync-interval').onchange = (e) => {
@@ -692,8 +714,6 @@
         } else {
             waitForElement(()=>document.querySelector('#seeker-control-panel'), node => {node.style.display = '';});
             waitForElement(()=>document.querySelector('#control-panel-showhide span'), node => {node.innerText = '隐藏追帧';});
-            waitForElement(()=>document.querySelector('#playurl-config-showhide'), node => {node.style.display = '';});
-            waitForElement(()=>document.querySelector('#playurl-buttons'), node => {node.style.display = 'none';});
             waitForElement(()=>document.querySelector('#head-info-vm .upper-row .right-ctnr'), node => {node.style.marginTop = '-7px';});
             waitForElement(()=>document.querySelector('#head-info-vm .lower-row'), node => {node.style.marginTop = '0px';});
             waitForElement(()=>document.querySelector('#head-info-vm .lower-row .right-ctnr'), node => { node.style.flex = '100 1 auto'; node.style.flexWrap = 'wrap'; node.style.placeContent = 'space-around center'; node.style.rowGap = '5px';});

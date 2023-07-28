@@ -10,9 +10,12 @@ https://greasyfork.org/zh-CN/scripts/453967
 
 脚本加载后，会在直播界面右上方粉丝团处生成配置项，可以根据网络情况设定追帧的目标缓存时长
 
+小样本测试下原画的HLS(fMp4)和二压的flv相比延迟仍较高，建议优先使用HTTP-FLV协议的推流
+
 ## 次要功能
 
-
+- 0.6.12
+	- 在高级设置中可以开关降低播放速度和设置降低播放速度的缓存阈值
 - 0.6.6
     - 自定义API：可以自定义获取playurl所用的API endpoint：https://github.com/c-basalt/bilibili-live-seeker-script/issues/1
 - 0.6.3
