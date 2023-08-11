@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.12
+// @version      0.6.13
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -162,6 +162,7 @@
 
     const getStoredValue = (key) => {
         const defaultValues = {
+            'auto-AV-sync': false,
             'hide-stats': false,
             'auto-reload': true,
             'force-flv': true,
@@ -220,11 +221,12 @@
         v.currentTime = v.currentTime + step;
     }
     const stopAutoResync = () => {
+        console.debug("clear AV sync interval")
         clearInterval(window.AVResyncIntervalId);
     }
     const startAutoResync = () => {
-        console.debug("start AV sync interval")
         stopAutoResync();
+        console.debug("start AV sync interval")
         window.AVResyncIntervalId = setInterval(()=>{ window.AVResync() }, getValue("AV-resync-interval", true)*1000);
     }
 
@@ -485,7 +487,6 @@
     window.saveConfig = () => {
         console.debug('config changed');
         Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=checkbox]')).forEach( e => {
-            if (e.id === "auto-AV-sync") return;
             localStorage.setItem(e.id, e.checked);
         });
         Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=number]')).forEach( e => {
@@ -556,7 +557,7 @@
     }
     window.setSlowdownThres = () => {
         const storedThres = JSON.stringify(getStoredValue('speeddown-thres'));
-        const value = prompt("请输入想要设定的自动减速阈值\nJSON格式为[[缓冲长度(秒)，播放速率],...]\n留空点击确定以恢复默认值", storedThres);
+        const value = prompt("请输入想要设定的自动减速阈值\nJSON格式为[[缓冲长度阈值(秒)，播放速率],...]\n留空点击确定以恢复默认值", storedThres);
         if (value === null || value === storedThres) return;
         if (value === "") {
             localStorage.removeItem('speeddown-thres');
@@ -588,31 +589,53 @@
         const e = document.createElement("span");
         e.innerHTML = (
             '<span id="basic-settings-page">' +
+            '  <span title="重新从当前的位置开始播放直播来重置音视频的同步，以应对音视频的不同步  &#13;&#10;重置时会有一瞬的卡顿  &#13;&#10;勾选后自动每隔一段时间执行一次重置，重置间隔可以在高级选项中设置">' +
             '<button id="reset-AV-sync" type="button" onclick="AVResync()" style="width:7em">重置音画同步</button><input type="checkbox" id="auto-AV-sync">' +
+            '  </span><span title="隐藏播放器右键菜单中的“视频统计信息”悬浮窗  &#13;&#10;悬浮窗未开启时会自动取消勾选">' +
             '<label for="hide-stats">隐藏统计</label><input type="checkbox" id="hide-stats">' +
+            '  </span><span title="当检测到播放器暂停，且缓冲长度超过“追帧秒数”时，自动恢复播放器播放">' +
             '<label for="prevent-pause">避免暂停</label><input type="checkbox" id="prevent-pause" onchange="saveConfig()">' +
+            '  </span><span title="直播状态下，检测到错误时自动刷新页面  &#13;&#10;或在下播状态下，弹幕服务器疑似断连时，自动刷新页面  &#13;&#10;刷新页面前文字会变为橙色">' +
             '<label for="auto-reload">自动刷新</label><input type="checkbox" id="auto-reload" onchange="saveConfig()">' +
+            '  </span>' +
             '<br>' +
+            '  <span title="尝试去除视频流中的HEVC(“PRO”画质)和HLS流，让播放器优先使用FLV协议的AVC流，以降低延迟">' +
             '<label for="force-flv">强制avc+flv</label><input type="checkbox" id="force-flv" onchange="saveConfig()">' +
+            '  </span><span title="当获取的直播视频流为延迟更高的二压视频时，尝试替换为保存的原画流，以降低延迟  &#13;&#10;当前直播间没有保存原画流/原画流已过期时，选择框为灰色">' +
             '<label for="force-raw">强制原画</label><input type="checkbox" id="force-raw" onchange="saveConfig()">' +
+            '  </span><span title="进入直播间时自动切换右下角的“原画”画质。和手动切换效果相同">' +
             '<label for="auto-quality">自动原画</label><input type="checkbox" id="auto-quality" onchange="saveConfig()">' +
+            '  </span><span title="阻止直播间进行轮播">' +
             '<label for="block-roundplay">阻止轮播</label><input type="checkbox" id="block-roundplay" onchange="saveConfig()">' +
+            '  </span>' +
             '<br>' +
             '<button id="go-to-adv-settings" type="button" style="width: 7em">转到高级选项</button>' +
+            '  <span title="本地播放器追帧的目标缓存长度，单位为秒（播放器缓存的长度1：1等于播放器产生的延迟）  &#13;&#10;过小容易导致卡顿甚至丢失原画的连接  &#13;&#10;需根据自己的网络情况选择合适的值">' +
             '<label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" onchange="saveConfig()" step="0.1" style="width: 3em;">' +
+            '  </span>' +
             '</span>' +
 
             '<span id="adv-settings-page" style="display:none">' +
+            '  <span title="复制当前直播间保存的原画流链接到剪贴板，可用于“设置连接”">' +
             '<button id="copy-playurl" type="button" style="width: 7em" onclick="copyPlayurl()">复制推流链接</button>' +
+            '  </span><span title="手动设置当前直播间保存的原画流链接，用于“强制原画”选项让播放器加载延迟更低的原画流  &#13;&#10;错误的配置可能导致无法正常观看直播！">' +
             '<button id="set-playurl" type="button" onclick="setPlayurl()">设置链接!</button>' +
+            '  </span><span title="设置获取视频流链接的API，详见说明中的链接  &#13;&#10;使用后可能无法观看各种限定直播！  &#13;&#10;错误的配置可能导致无法正常观看直播！">' +
             '<button id="set-endpoint" type="button" style="width: 8em" onclick="setEndpoint()">设置视频流API !</button>' +
+            '  </span>' +
             '<br>' +
-            '<button id="set-slowdown-thres" type="button" style="width: 7em" onclick="setSlowdownThres()">设置减速阈值</button>' +
+            '  <span title="设置缓存时长极低时，降低播放速度的各级阶梯的缓冲时长阈值，以及各级阶梯要降低到的播放速度  &#13;&#10;错误的配置可能导致播放不正常！">' +
+            '<button id="set-slowdown-thres" type="button" style="width: 7.5em" onclick="setSlowdownThres()">设置减速阈值!</button>' +
+            '  </span><span title="取消勾选后将不会在缓存时长降低至减速阈值后自动降低播放速度">' +
             '<label for="auto-slowdown">自动减速</label><input type="checkbox" id="auto-slowdown" onchange="saveConfig()">' +
+            '  </span>' +
             '<br>' +
-            '<button id="go-to-basic-settings" type="button" style="width: 7em">转到普通选项</button>' +
+            '<button id="go-to-basic-settings" type="button" style="width: 7em">转到基础选项</button>' +
+            '  <span title="重置音画同步时，重新开始位置相对现在的秒数  &#13;&#10;合适的值可以减轻重置时的卡顿感">' +
             '<label for="AV-resync-step">音画同步重置步进</label><input type="number" id="AV-resync-step" onchange="saveConfig()" step="0.01" style="width: 3.5em;">' +
+            '  </span><span title="勾选“重置音画同步”后，自动进行音画同步重置的间隔时长，单位为秒">' +
             '<label for="AV-resync-interval">间隔</label><input type="number" id="AV-resync-interval" onchange="saveConfig()" step="1" style="width: 3.5em;">' +
+            '  </span>' +
             '</span>' +
 
             '<style>#seeker-control-panel button { width:5.5em;padding:1px;background: transparent; border: 1.5px solid #999; border-radius: 4px; color: #999; filter: contrast(0.6);}' +
@@ -645,15 +668,18 @@
                 Array.prototype.filter.call(document.querySelector('.web-player-video-info-panel').querySelectorAll('div'), i=>i.innerText==='[x]').forEach(i=>{i.style.removeProperty('display')});
             }
         }
+
         document.querySelector('#go-to-adv-settings').onclick = (e) => {
             document.querySelector('#basic-settings-page').style.display = "none";
             document.querySelector('#adv-settings-page').style.display = "";
         }
+
         document.querySelector('#go-to-basic-settings').onclick = (e) => {
             document.querySelector('#basic-settings-page').style.display = "";
             document.querySelector('#adv-settings-page').style.display = "none";
         }
         document.querySelector('#auto-AV-sync').onchange = (e) => {
+            window.saveConfig();
             if (e.target.checked) {
                 startAutoResync();
             } else {
@@ -661,8 +687,8 @@
             }
         }
         document.querySelector('#AV-resync-interval').onchange = (e) => {
-            startAutoResync();
             window.saveConfig();
+            if (getValue('auto-AV-sync', true)) startAutoResync();
         }
 
         Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel label, #seeker-control-panel button')).forEach( e => {
@@ -670,8 +696,7 @@
         })
 
         Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=checkbox]')).forEach( e => {
-            if (e.id === "hide-stats") return (getStoredValue(e.id) && setTimeout(()=>{e.click()}, 100));
-            if (e.id === "auto-AV-sync") return;
+            if (e.id === "hide-stats" || e.id === 'auto-AV-sync') return (getStoredValue(e.id) && setTimeout(()=>{e.click()}, 100));
             e.checked = getStoredValue(e.id);
         })
         Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=number]')).forEach( e => {
