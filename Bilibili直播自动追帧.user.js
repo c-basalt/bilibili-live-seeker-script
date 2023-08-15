@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.13
+// @version      0.6.14
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -311,6 +311,7 @@
     const xhrGetApi = (url) => {
         const request = new XMLHttpRequest();
         request.open('GET', url, false);
+        request.withCredentials = true;
         request.send(null);
         if (request.status === 200) {
             return JSON.parse(request.responseText);
@@ -388,61 +389,76 @@
 
     const origFetch = window.fetch;
     window.fetch = async function() {
-        let url = arguments[0];
-        if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
-            if (isChecked('force-flv', true)) {
-                url = url.replace(/protocol=0,[^&]+/, 'protocol=0');
-                url = url.replace(/codec=0,[^&]+/, 'codec=0');
+        try {
+            const resource = arguments[0];
+            let url;
+            if (resource instanceof Request) {
+                url = resource.url;
+            } else {
+                url = resource
             }
-            if (localStorage.getItem('playurl-custom-endpoint')) {
-                url = url.replace(/^\/\//, 'https://');
-                url = url.replace('https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo', localStorage.getItem('playurl-custom-endpoint'));
-                arguments[1] && (arguments[1].credentials = 'omit');
-                console.debug('replacing API endpoint', url, arguments[1]);
+            if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
+                if (isChecked('force-flv', true)) {
+                    url = url.replace(/protocol=0,[^&]+/, 'protocol=0');
+                    url = url.replace(/codec=0,[^&]+/, 'codec=0');
+                }
+                if (localStorage.getItem('playurl-custom-endpoint')) {
+                    url = url.replace(/^\/\//, 'https://');
+                    url = url.replace('https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo', localStorage.getItem('playurl-custom-endpoint'));
+                    arguments[1] && (arguments[1].credentials = 'omit');
+                    console.debug('replacing API endpoint', url, arguments[1]);
+                }
+                if (resource instanceof Request) {
+                    arguments[0] = new Request(url, resource);
+                } else {
+                    arguments[0] = url;
+                }
+                console.debug('fetch request', arguments);
+                const response = await origFetch.apply(this, arguments);
+                const r = interceptPlayurl(await response.clone().json());
+                response.json = async () => { return r };
+                return response;
+            } else if (url.match('api.live.bilibili.com/live/getRoundPlayVideo') && isChecked('block-roundplay', true)) {
+                const response = await origFetch.apply(this, arguments);
+                response.json = async () => ({"code":0,"data":{"cid":-3}});
+                return response;
             }
-            arguments[0] = url;
-            console.debug('fetch request', arguments);
-            const response = await origFetch.apply(this, arguments);
-            const r = interceptPlayurl(await response.clone().json());
-            response.json = async () => { return r };
-            return response;
-        } else if (url.match('api.live.bilibili.com/live/getRoundPlayVideo') && isChecked('block-roundplay', true)) {
-            const response = await origFetch.apply(this, arguments);
-            response.json = async () => ({"code":0,"data":{"cid":-3}});
-            return response;
-        } else {
-            return origFetch.apply(this, arguments);
-        }
+        } catch (e) { }
+        return origFetch.apply(this, arguments);
     }
 
     const origOpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function() {
-        let url = arguments[1];
-        if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
-            if (getStoredValue('auto-quality')) {
-                url = url.replace(/qn=[^&]+/, 'qn=10000');
+        try {
+            let url = arguments[1];
+            if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
+                if (getStoredValue('auto-quality')) {
+                    url = url.replace(/qn=[^&]+/, 'qn=10000');
+                }
+                if (getStoredValue('force-flv')) {
+                    url = url.replace(/protocol=0,[^&]+/, 'protocol=0');
+                    url = url.replace(/codec=0,[^&]+/, 'codec=0');
+                }
+                if (localStorage.getItem('playurl-custom-endpoint')) {
+                    url = url.replace('https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo', localStorage.getItem('playurl-custom-endpoint'));
+                    console.debug('replacing API endpoint', url);
+                }
+                arguments[1] = url;
             }
-            if (getStoredValue('force-flv')) {
-                url = url.replace(/protocol=0,[^&]+/, 'protocol=0');
-                url = url.replace(/codec=0,[^&]+/, 'codec=0');
-            }
-            if (localStorage.getItem('playurl-custom-endpoint')) {
-                url = url.replace('https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo', localStorage.getItem('playurl-custom-endpoint'));
-                console.debug('replacing API endpoint', url);
-            }
-            arguments[1] = url;
-        }
+        } catch { }
         return origOpen.apply(this, arguments);
     }
 
     const xhrAccessor = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, 'responseText');
     Object.defineProperty(XMLHttpRequest.prototype, 'responseText', {
         get: function() {
-            if (this.responseURL.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo') || this.responseURL.match(localStorage.getItem('playurl-custom-endpoint'))) {
-                const rsp = JSON.parse(xhrAccessor.get.call(this));
-                cacheRoomInit(rsp);
-                return JSON.stringify(interceptPlayurl(rsp));
-            }
+            try {
+                if (this.responseURL.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo') || this.responseURL.match(localStorage.getItem('playurl-custom-endpoint'))) {
+                    const rsp = JSON.parse(xhrAccessor.get.call(this));
+                    cacheRoomInit(rsp);
+                    return JSON.stringify(interceptPlayurl(rsp));
+                }
+            } catch { }
             return xhrAccessor.get.call(this);
         },
         set: function(str) {
