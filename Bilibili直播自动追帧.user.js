@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.15
+// @version      0.6.16
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -625,6 +625,9 @@
             '<label for="block-roundplay">阻止轮播</label><input type="checkbox" id="block-roundplay" onchange="saveConfig()">' +
             '  </span>' +
             '<br>' +
+            '  <span title="跳转至非活动页面的常规直播间">' +
+            '<a id="go-to-blanc-room" style="display: none; text-align: center; width: 7.5em" target="_parent">转至常规直播间</a>' +
+            '  </span>' +
             '<button id="go-to-adv-settings" type="button" style="width: 7em">转到高级选项</button>' +
             '  <span title="本地播放器追帧的目标缓存长度，单位为秒（播放器缓存的长度1：1等于播放器产生的延迟）  &#13;&#10;过小容易导致卡顿甚至丢失原画的连接  &#13;&#10;需根据自己的网络情况选择合适的值">' +
             '<label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" onchange="saveConfig()" step="0.1" style="width: 3em;">' +
@@ -654,8 +657,8 @@
             '  </span>' +
             '</span>' +
 
-            '<style>#seeker-control-panel button { width:5.5em;padding:1px;background: transparent; border: 1.5px solid #999; border-radius: 4px; color: #999; filter: contrast(0.6);}' +
-            '#seeker-control-panel button:hover { filter: none; } #seeker-control-panel button:active { filter: none; transform: translate(0.3px, 0.3px); }' +
+            '<style>#seeker-control-panel button, #seeker-control-panel a { width:5.5em;padding:1px;background: transparent; border: 1.5px solid #999; border-radius: 4px; color: #999; filter: contrast(0.6);}' +
+            '#seeker-control-panel button:hover, #seeker-control-panel a:hover { filter: none; } #seeker-control-panel button:active { filter: none; transform: translate(0.3px, 0.3px); }' +
             '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.6);} #seeker-control-panel input { vertical-align: middle; margin:1px; }' +
             '#seeker-control-panel label.danmaku-lost, #seeker-control-panel label.live-on, #seeker-control-panel label.video-error, #seeker-control-panel label.reload { color: orange!important; filter: none; }</style>'
         );
@@ -685,6 +688,11 @@
             }
         }
 
+        if (window.self !== window.top) {
+            document.querySelector('#go-to-blanc-room').style.display = "inline-block";
+            document.querySelector('#go-to-blanc-room').href = location.href;
+        }
+
         document.querySelector('#go-to-adv-settings').onclick = (e) => {
             document.querySelector('#basic-settings-page').style.display = "none";
             document.querySelector('#adv-settings-page').style.display = "";
@@ -707,7 +715,7 @@
             if (getValue('auto-AV-sync', true)) startAutoResync();
         }
 
-        Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel label, #seeker-control-panel button')).forEach( e => {
+        Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel label, #seeker-control-panel button, #seeker-control-panel a')).forEach( e => {
             e.className += ' live-skin-normal-a-text';
         })
 
