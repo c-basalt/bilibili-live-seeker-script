@@ -104,19 +104,20 @@
         return value;
     }
 
-    const speedupThres = [
-        [2, 1.3],
-        [1, 1.2],
-        [0, 1.1]
-    ]
     const adjustSpeedup = () => {
         const thres = getThres()
         if (!thres) return;
         try {
             if (!isLiveStream()) return;
+            const speedUpChecked = isChecked('auto-speedup');
+            if (!speedUpChecked) {
+                if (speedUpChecked === false && getVideoElement()?.playbackRate > 1) window.resetRate();
+                return;
+            }
             const bufferLen = window.bufferlen()
             if (bufferLen === null) return;
             let diffThres, rate;
+            const speedupThres = getStoredValue('speedup-thres');
             for (let i = 0; i < speedupThres.length; i++) {
                 [diffThres, rate] = speedupThres[i];
                 if (bufferLen - thres > diffThres) {
@@ -169,12 +170,14 @@
             'prevent-pause': false,
             'force-raw': false,
             'auto-quality': true,
+            'auto-speedup': true,
             'auto-slowdown': true,
             'block-roundplay': false,
             'buffer-threshold': 1.5,
             'AV-resync-step': 0.05,
             'AV-resync-interval': 300,
-            'speeddown-thres': [[0.2, 0.1],[0.3, 0.3],[0.6, 0.6]],
+            'speedup-thres': [[2, 1.3], [1, 1.2], [0, 1.1]],
+            'speeddown-thres': [[0.2, 0.1], [0.3, 0.3], [0.6, 0.6]],
         };
         try {
             const value = JSON.parse(localStorage.getItem(key));
@@ -571,9 +574,25 @@
             localStorage.setItem('playurl-custom-endpoint', value);
         }
     }
+    window.setSpeedUpThres = () => {
+        const storedThres = JSON.stringify(getStoredValue('speedup-thres'));
+        const value = prompt("请输入想要设定的自动加速阈值\nJSON格式为[[缓冲长度阈值(秒), 播放速率],...]\n留空点击确定以恢复默认值", storedThres);
+        if (value === null || value === storedThres) return;
+        if (value === "") {
+            localStorage.removeItem('speedup-thres');
+        } else {
+            try {
+                const newThres = JSON.parse(value);
+                localStorage.setItem('speedup-thres', JSON.stringify(newThres));
+            } catch (e) {
+                alert("设置失败\n" + e);
+                console.error(e);
+            }
+        }
+    }
     window.setSlowdownThres = () => {
         const storedThres = JSON.stringify(getStoredValue('speeddown-thres'));
-        const value = prompt("请输入想要设定的自动减速阈值\nJSON格式为[[缓冲长度阈值(秒)，播放速率],...]\n留空点击确定以恢复默认值", storedThres);
+        const value = prompt("请输入想要设定的自动减速阈值\nJSON格式为[[缓冲长度阈值(秒), 播放速率],...]\n留空点击确定以恢复默认值", storedThres);
         if (value === null || value === storedThres) return;
         if (value === "") {
             localStorage.removeItem('speeddown-thres');
@@ -643,6 +662,11 @@
             '<button id="set-endpoint" type="button" style="width: 8em" onclick="setEndpoint()">设置视频流API !</button>' +
             '  </span>' +
             '<br>' +
+            '  <span title="设置缓存时长极高时，加快播放速度的各级阶梯的缓冲时长阈值，以及各级阶梯要加快到的播放速度  &#13;&#10;错误的配置可能导致播放不正常！">' +
+            '<button id="set-slowdown-thres" type="button" style="width: 7.5em" onclick="setSpeedUpThres()">设置加速阈值!</button>' +
+            '  </span><span title="取消勾选后将不会在缓存时长增大至加速阈值后自动加快播放速度">' +
+            '<label for="auto-speedup">自动加速</label><input type="checkbox" id="auto-speedup" onchange="saveConfig()">' +
+            '  </span>' +
             '  <span title="设置缓存时长极低时，降低播放速度的各级阶梯的缓冲时长阈值，以及各级阶梯要降低到的播放速度  &#13;&#10;错误的配置可能导致播放不正常！">' +
             '<button id="set-slowdown-thres" type="button" style="width: 7.5em" onclick="setSlowdownThres()">设置减速阈值!</button>' +
             '  </span><span title="取消勾选后将不会在缓存时长降低至减速阈值后自动降低播放速度">' +
