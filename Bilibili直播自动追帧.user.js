@@ -617,7 +617,7 @@
             '<br>' +
             '  <span title="尝试去除视频流中的HEVC(“PRO”画质)和HLS流，让播放器优先使用FLV协议的AVC流，以降低延迟">' +
             '<label for="force-flv">强制avc+flv</label><input type="checkbox" id="force-flv" onchange="saveConfig()">' +
-            '  </span><span title="当获取的直播视频流为延迟更高的二压视频时，尝试替换为保存的原画流，以降低延迟  &#13;&#10;当前直播间没有保存原画流/原画流已过期时，选择框为灰色  &#13;&#10;主播网络卡顿/重开推流后可能出现一直重复最后几秒的情况，需取消该选项改用新推的二压流">' +
+            '  </span><span title="当获取的直播视频流为延迟更高的二压视频时，尝试替换为保存的原画流，以降低延迟  &#13;&#10;当前直播间没有保存原画流/原画流已过期时，选择框为灰色  &#13;&#10;主播网络卡顿/重开推流后可能出现一直重复最后几秒的情况，需取消该选项后切换一次画质或刷新">' +
             '<label for="force-raw">强制原画</label><input type="checkbox" id="force-raw" onchange="saveConfig()">' +
             '  </span><span title="进入直播间时自动切换右下角的“原画”画质。和手动切换效果相同">' +
             '<label for="auto-quality">自动原画</label><input type="checkbox" id="auto-quality" onchange="saveConfig()">' +
