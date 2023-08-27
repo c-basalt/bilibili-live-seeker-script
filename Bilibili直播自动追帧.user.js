@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.17
+// @version      0.6.18
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -648,7 +648,7 @@
             '<a id="go-to-blanc-room" style="display: none; text-align: center; width: 7.5em" target="_parent">转至常规直播间</a>' +
             '  </span>' +
             '<button id="go-to-adv-settings" type="button" style="width: 7em">转到高级选项</button>' +
-            '  <span title="本地播放器追帧的目标缓存长度，单位为秒（播放器缓存的长度1：1等于播放器产生的延迟）  &#13;&#10;过小容易导致卡顿甚至丢失原画的连接  &#13;&#10;需根据自己的网络情况选择合适的值">' +
+            '  <span title="本地播放器追帧的目标缓冲长度，单位为秒（播放器缓冲的长度1：1等于播放器产生的延迟）  &#13;&#10;过小容易导致卡顿甚至丢失原画的连接  &#13;&#10;需根据自己的网络情况选择合适的值  &#13;&#10;可在高级选项中关闭追帧">' +
             '<label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" onchange="saveConfig()" step="0.1" style="width: 3em;">' +
             '  </span>' +
             '</span>' +
@@ -667,9 +667,9 @@
             '  </span><span title="取消勾选后将不会在缓冲时长超过追帧秒数时自动加速追帧">' +
             '<label for="auto-speedup">追帧加速</label><input type="checkbox" id="auto-speedup" onchange="saveConfig()">' +
             '  </span>' +
-            '  <span title="设置缓存时长极低时，降低播放速度的各级阶梯的缓冲时长阈值，以及各级阶梯要降低到的播放速度  &#13;&#10;错误的配置可能导致播放不正常！">' +
+            '  <span title="设置缓冲时长极低时，降低播放速度的各级阶梯的缓冲时长阈值，以及各级阶梯要降低到的播放速度  &#13;&#10;错误的配置可能导致播放不正常！">' +
             '<button id="set-slowdown-thres" type="button" style="width: 7.5em" onclick="setSlowdownThres()">设置减速阈值!</button>' +
-            '  </span><span title="取消勾选后将不会在缓存时长降低至减速阈值后自动降低播放速度">' +
+            '  </span><span title="取消勾选后将不会在缓冲时长降低至减速阈值后自动降低播放速度">' +
             '<label for="auto-slowdown">自动减速</label><input type="checkbox" id="auto-slowdown" onchange="saveConfig()">' +
             '  </span>' +
             '<br>' +
@@ -682,6 +682,7 @@
             '</span>' +
 
             '<style>#seeker-control-panel button, #seeker-control-panel a { width:5.5em;padding:1px;background: transparent; border: 1.5px solid #999; border-radius: 4px; color: #999; filter: contrast(0.6);}' +
+            '#seeker-control-panel input[type="number"] { border: 1.5px solid #999; border-radius: 2px; }'+
             '#seeker-control-panel button:hover, #seeker-control-panel a:hover { filter: none; } #seeker-control-panel button:active { filter: none; transform: translate(0.3px, 0.3px); }' +
             '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.6);} #seeker-control-panel input { vertical-align: middle; margin:1px; }' +
             '#seeker-control-panel label.danmaku-lost, #seeker-control-panel label.live-on, #seeker-control-panel label.video-error, #seeker-control-panel label.reload { color: orange!important; filter: none; }</style>'
@@ -689,27 +690,42 @@
         e.style = 'text-align: right; flex: 0 0 fit-content; margin-left: 5px; margin-top: -5px;';
         e.id = 'seeker-control-panel';
         node.appendChild(e);
-        document.querySelector('#hide-stats').onchange = (e) => {
-            window.saveConfig();
-            if (!document.querySelector('.web-player-video-info-panel')) {
-                e.target.checked = false
-                return
+
+        const updateInfoPanelStyle = (node) => {
+            const infoPanel = document.querySelector('.web-player-video-info-panel');
+            if (!infoPanel) {
+                node.checked = false;
+                return;
             }
-            if (e.target.checked) {
-                if (document.querySelector('.web-player-video-info-panel').style.display === 'none') {
-                    e.target.checked = false
-                    document.querySelector('.web-player-video-info-panel').style.setProperty('opacity', 1)
-                    return
+            if (node.checked) {
+                if (infoPanel.style.display === 'none') {
+                    infoPanel.style.opacity = '';
+                    node.checked = false;
+                    return;
                 } else {
-                    Array.prototype.filter.call(document.querySelector('.web-player-video-info-panel').querySelectorAll('div'), i => i.innerText === '[x]').forEach(i => { i.style.setProperty('display', 'none') });
-                    document.querySelector('.web-player-video-info-panel').style.setProperty('opacity', 0)
-                    document.querySelector('.web-player-video-info-panel').style.setProperty('user-select', 'none')
+                    Array.prototype.filter.call(infoPanel.querySelectorAll('div'), i => i.innerText === '[x]').forEach(i => { i.style.display = 'none'; });
+                    infoPanel.style.opacity = '0';
+                    infoPanel.style.userSelect = 'none';
                 }
             } else {
-                document.querySelector('.web-player-video-info-panel').style.setProperty('user-select', 'text')
-                document.querySelector('.web-player-video-info-panel').style.setProperty('opacity', 1)
-                Array.prototype.filter.call(document.querySelector('.web-player-video-info-panel').querySelectorAll('div'), i => i.innerText === '[x]').forEach(i => { i.style.removeProperty('display') });
+                infoPanel.style.userSelect = 'text';
+                infoPanel.style.opacity = '';
+                Array.prototype.filter.call(infoPanel.querySelectorAll('div'), i => i.innerText === '[x]').forEach(i => { i.style.display = ''; });
             }
+        }
+        const updateThresInputStyle = (node) => {
+            if (!node.checked) {
+                document.querySelector('label[for="buffer-threshold"]').style.textDecoration = 'line-through black solid 2px';
+                document.querySelector('#buffer-threshold').style.background = '#feee';
+            } else {
+                document.querySelector('label[for="buffer-threshold"]').style.textDecoration = '';
+                document.querySelector('#buffer-threshold').style.background = '';
+            }
+        }
+
+        document.querySelector('#hide-stats').onchange = (e) => {
+            window.saveConfig();
+            updateInfoPanelStyle(e.target);
         }
 
         if (window.self !== window.top) {
@@ -726,6 +742,7 @@
             document.querySelector('#basic-settings-page').style.display = "";
             document.querySelector('#adv-settings-page').style.display = "none";
         }
+
         document.querySelector('#auto-AV-sync').onchange = (e) => {
             window.saveConfig();
             if (e.target.checked) {
@@ -739,6 +756,11 @@
             if (getValue('auto-AV-sync', true)) startAutoResync();
         }
 
+        document.querySelector('#auto-speedup').onchange = (e) => {
+            window.saveConfig();
+            updateThresInputStyle(e.target);
+        }
+
         Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel label, #seeker-control-panel button, #seeker-control-panel a')).forEach(e => {
             e.className += ' live-skin-normal-a-text';
         })
@@ -746,6 +768,7 @@
         Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=checkbox]')).forEach(e => {
             if (e.id === "hide-stats" || e.id === 'auto-AV-sync') return (getStoredValue(e.id) && setTimeout(() => { e.click() }, 100));
             e.checked = getStoredValue(e.id);
+            if (e.id === 'auto-speedup') updateThresInputStyle(e);
         })
         Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=number]')).forEach(e => {
             e.value = getStoredValue(e.id);
