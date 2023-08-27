@@ -576,7 +576,7 @@
     }
     window.setSpeedUpThres = () => {
         const storedThres = JSON.stringify(getStoredValue('speedup-thres'));
-        const value = prompt("请输入想要设定的自动加速阈值\nJSON格式为[[缓冲长度阈值(秒), 播放速率],...]\n留空点击确定以恢复默认值", storedThres);
+        const value = prompt("请输入想要设定的追帧加速阈值\nJSON格式为[[缓冲长度阈值(秒), 播放速率],...]\n留空点击确定以恢复默认值", storedThres);
         if (value === null || value === storedThres) return;
         if (value === "") {
             localStorage.removeItem('speedup-thres');
