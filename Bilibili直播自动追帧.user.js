@@ -662,10 +662,10 @@
             '<button id="set-endpoint" type="button" style="width: 8em" onclick="setEndpoint()">设置视频流API !</button>' +
             '  </span>' +
             '<br>' +
-            '  <span title="设置缓存时长极高时，加快播放速度的各级阶梯的缓冲时长阈值，以及各级阶梯要加快到的播放速度  &#13;&#10;错误的配置可能导致播放不正常！">' +
-            '<button id="set-slowdown-thres" type="button" style="width: 7.5em" onclick="setSpeedUpThres()">设置加速阈值!</button>' +
-            '  </span><span title="取消勾选后将不会在缓存时长增大至加速阈值后自动加快播放速度">' +
-            '<label for="auto-speedup">自动加速</label><input type="checkbox" id="auto-speedup" onchange="saveConfig()">' +
+            '  <span title="设置缓冲时长超过追帧秒数时，缓冲长度和追帧秒数的差值的各级阶梯阈值，以及各级阶梯要加快到的播放速度  &#13;&#10;错误的配置可能导致播放不正常！">' +
+            '<button id="set-speedup-thres" type="button" style="width: 7.5em" onclick="setSpeedUpThres()">设置加速阈值!</button>' +
+            '  </span><span title="取消勾选后将不会在缓冲时长超过追帧秒数时自动加速追帧">' +
+            '<label for="auto-speedup">追帧加速</label><input type="checkbox" id="auto-speedup" onchange="saveConfig()">' +
             '  </span>' +
             '  <span title="设置缓存时长极低时，降低播放速度的各级阶梯的缓冲时长阈值，以及各级阶梯要降低到的播放速度  &#13;&#10;错误的配置可能导致播放不正常！">' +
             '<button id="set-slowdown-thres" type="button" style="width: 7.5em" onclick="setSlowdownThres()">设置减速阈值!</button>' +
