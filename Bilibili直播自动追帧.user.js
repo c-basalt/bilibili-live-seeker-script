@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.18
+// @version      0.6.19
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -89,23 +89,8 @@
         return videoLen || statsLen;
     }
 
-    const getThres = () => {
-        const thresNew = getValue('buffer-threshold');
-        const thresOld = _getThres();
-        if (thresNew !== thresOld) console.debug('different thresholds', thresNew, thresOld);
-        return thresOld;
-    }
-
-    const _getThres = () => {
-        const e = document.querySelector('#buffer-threshold');
-        if (!e) return null
-        const value = Number(e.value)
-        if (!value) return null
-        return value;
-    }
-
     const adjustSpeedup = () => {
-        const thres = getThres()
+        const thres = getValue('buffer-threshold');
         if (!thres) return;
         try {
             if (!isLiveStream()) return;
@@ -127,7 +112,7 @@
             }
             if (getVideoElement()?.playbackRate > 1) window.resetRate();
         } catch (e) {
-            console.error(e)
+            console.error('[bililive-seeker] Unexpected error when speeding up:\n', e)
         }
     }
 
@@ -152,7 +137,7 @@
             }
             if (getVideoElement()?.playbackRate < 1) window.resetRate();
         } catch (e) {
-            console.error(e)
+            console.error('[bililive-seeker] Unexpected error when speeding down:\n', e)
         }
     }
     window.speedUpIntervalId = setInterval(() => { adjustSpeedup() }, 300)
@@ -209,27 +194,28 @@
         return true; // 直播
     }
     const getRoomId = () => {
-        if (!window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id) getRoomInit();
-        return window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id || Number(location.href.match(/\/(\d+)/)[1]);
+        const _getRoomId = () => window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id || window.__roomInitRes?.data?.room_id;
+        if (!_getRoomId()) getRoomInit();
+        return _getRoomId() || Number(location.href.match(/\/(\d+)/)[1]);
     }
 
 
     // ----------------------- 音画同步重置 -----------------------
 
     window.AVResync = () => {
-        console.debug("enforce AV sync")
+        console.debug("[bililive-seeker] enforce AV sync")
         const v = getVideoElement();
         const step = getValue('AV-resync-step', true);
         if (!v || step === null) return;
         v.currentTime = v.currentTime + step;
     }
     const stopAutoResync = () => {
-        console.debug("clear AV sync interval")
+        console.debug("[bililive-seeker] clear AV sync interval")
         clearInterval(window.AVResyncIntervalId);
     }
     const startAutoResync = () => {
         stopAutoResync();
-        console.debug("start AV sync interval")
+        console.debug("[bililive-seeker] start AV sync interval")
         window.AVResyncIntervalId = setInterval(() => { window.AVResync() }, getValue("AV-resync-interval", true) * 1000);
     }
 
@@ -241,7 +227,7 @@
         const v = getVideoElement();
         if (v && isLiveStream()) {
             if (v.paused) {
-                const thres = getThres();
+                const thres = getValue('buffer-threshold');
                 const bufferLen = window.bufferlen();
                 if (thres && bufferLen && thres > bufferLen) return;
                 v.play();
@@ -262,7 +248,7 @@
                     document.querySelector('label[for="auto-reload"]').classList.add('danmaku-lost');
                     setTimeout(() => { window.location.reload(); }, 5000);
                 } else {
-                    console.debug('chat history changed');
+                    console.debug('[bililive-seeker] chat history changed');
                 }
             }
         }
@@ -273,7 +259,7 @@
             fetch("https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=" + getRoomId() + "&protocol=0&format=0,1,2&codec=0&qn=10000&platform=web")
                 .then(r => r.json())
                 .then(r => {
-                    console.debug('live status', r.data?.live_status);
+                    console.debug('[bililive-seeker] live status', r.data?.live_status);
                     if (r.data?.live_status === 1) {
                         // 0: 闲置，1: 直播，2: 轮播
                         if (timeout) {
@@ -305,7 +291,7 @@
         document.querySelector('label[for="auto-reload"]').classList.remove('video-error');
     }
     window.offLiveReloadIntervalId = setInterval(() => { offLiveAutoReload({ timeout: 3600 * 1000 }) }, 600 * 1000);
-    window.checkLiveReloadIntervalId = setInterval(() => { checkIsLiveReload(10 * 1000) }, 300 * 1000);
+    window.checkLiveReloadIntervalId = setInterval(() => { checkIsLiveReload(10 * 1000) }, 60 * 1000);
     window.checkErrorReloadIntervalId = setInterval(() => { checkErrorReload(2000) }, 3000);
 
 
@@ -321,7 +307,7 @@
         }
     }
     const getPlayUrl = (room_id) => {
-        console.debug('request playurl');
+        console.debug('[bililive-seeker] request playurl');
         const rsp = xhrGetApi("https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=" + room_id + "&protocol=0,1&format=0,1,2&codec=0,1&qn=10000&platform=web&dolby=5&panorama=1");
         return rsp.data?.playurl_info?.playurl;
     }
@@ -336,25 +322,22 @@
 
     const cacheRoomInit = (roomInitRsp) => {
         if (window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data) return;
-        if (!window.__NEPTUNE_IS_MY_WAIFU__) {
-            window.__NEPTUNE_IS_MY_WAIFU__ = { roomInitRes: roomInitRsp };
-        } else {
-            window.__NEPTUNE_IS_MY_WAIFU__.roomInitRes = roomInitRsp;
-        }
+        if (window.__roomInitRes?.data) return;
+        window.__roomInitRes = roomInitRsp;
     }
     const cachePlayUrl = (playurl) => {
         if (!playurl?.stream) return;
         try {
-            console.debug('playurl', playurl);
+            console.debug('[bililive-seeker] playurl', playurl);
             const baseurl = playurl.stream[0].format[0].codec[0].base_url;
             const qn = playurl.stream[0].format[0].codec[0].current_qn;
             if (qn === 10000 && baseurl.match(/\/live_\d+_\d+\.flv/)) {
                 // 未二压的链接格式
-                console.debug('raw stream url', baseurl);
+                console.debug('[bililive-seeker] raw stream url', baseurl);
                 localStorage.setItem('playurl-' + playurl.cid, JSON.stringify(playurl));
             }
         } catch (e) {
-            console.error(e);
+            console.error('[bililive-seeker] Unexpected error when caching playurl:\n', e);
         }
     }
 
@@ -380,11 +363,11 @@
         const playurl = r.data?.playurl_info?.playurl;
         cachePlayUrl(playurl);
         if (!playurl) return r;
-        console.debug('playinfo', r);
+        console.debug('[bililive-seeker] playinfo', r);
         if (!isChecked('force-raw', true)) return r;
         expiredPlayurlChecker();
         const cachedUrl = JSON.parse(localStorage.getItem('playurl-' + playurl.cid));
-        console.debug('load cached url', cachedUrl);
+        console.debug('[bililive-seeker] load cached url', cachedUrl);
         if (!cachedUrl) return r;
         r.data.playurl_info.playurl = cachedUrl;
         return r;
@@ -401,40 +384,54 @@
         if (localStorage.getItem('playurl-custom-endpoint')) {
             url = url.replace(/^\/\//, 'https://');
             url = url.replace('https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo', localStorage.getItem('playurl-custom-endpoint'));
-            console.debug('replacing API endpoint', url);
+            console.debug('[bililive-seeker] replacing API endpoint', url);
         }
         return url;
     }
 
-    const origFetch = window.fetch;
-    window.fetch = async function () {
-        try {
-            const resource = arguments[0];
-            let url;
-            if (resource instanceof Request) {
-                url = resource.url;
-            } else {
-                url = resource
-            }
-            if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
-                url = replaceRoomplayReqUrl(url);
+    const hookFetch = () => {
+        const origFetch = window.fetch;
+        window.fetch = async function () {
+            try {
+                const resource = arguments[0];
+                let url;
                 if (resource instanceof Request) {
-                    arguments[0] = new Request(url, resource);
+                    url = resource.url;
                 } else {
-                    arguments[0] = url;
+                    url = resource
                 }
-                console.debug('fetch request', arguments);
-                const response = await origFetch.apply(this, arguments);
-                const r = interceptPlayurl(await response.clone().json());
-                return new Response(JSON.stringify(r), response);
-            } else if (url.match('api.live.bilibili.com/live/getRoundPlayVideo') && isChecked('block-roundplay', true)) {
-                return new Response('{"code":0,"data":{"cid":-3}}');
+                if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
+                    url = replaceRoomplayReqUrl(url);
+                    if (resource instanceof Request) {
+                        arguments[0] = new Request(url, resource);
+                    } else {
+                        arguments[0] = url;
+                    }
+                    console.debug('[bililive-seeker] fetch request', arguments);
+                    const response = await origFetch.apply(this, arguments);
+                    const r = interceptPlayurl(await response.clone().json());
+                    return new Response(JSON.stringify(r), response);
+                } else if (url.match('api.live.bilibili.com/live/getRoundPlayVideo') && isChecked('block-roundplay', true)) {
+                    console.debug('[bililive-seeker] block roundplay');
+                    return new Response('{"code":0,"data":{"cid":-3}}');
+                } else if (url === '//_test_hook_alive_dummy_url/') {
+                    return new Response('success');
+                }
+            } catch (e) {
+                console.error(e);
             }
-        } catch (e) {
-            console.error(e);
+            return origFetch.apply(this, arguments);
         }
-        return origFetch.apply(this, arguments);
+        console.debug('[bililive-seeker] `window.fetch` hooked');
     }
+    hookFetch();
+    const checkHookAlive = async () => {
+        for (let i = 0; i < 50; i++) {
+            await fetch('//_test_hook_alive_dummy_url/').catch(e => { hookFetch(); });
+            await new Promise(r => setTimeout(r, 100));
+        }
+    }
+    checkHookAlive();
 
     const origOpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function () {
@@ -450,61 +447,70 @@
         return origOpen.apply(this, arguments);
     }
 
-    const xhrAccessor = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, 'responseText');
-    Object.defineProperty(XMLHttpRequest.prototype, 'responseText', {
-        get: function () {
-            try {
-                if (this.responseURL.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo') || this.responseURL.match(localStorage.getItem('playurl-custom-endpoint'))) {
-                    const rsp = JSON.parse(xhrAccessor.get.call(this));
-                    cacheRoomInit(rsp);
-                    return JSON.stringify(interceptPlayurl(rsp));
+    try {
+        const xhrAccessor = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, 'responseText');
+        Object.defineProperty(XMLHttpRequest.prototype, 'responseText', {
+            get: function () {
+                try {
+                    if (this.responseURL.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo') || this.responseURL.match(localStorage.getItem('playurl-custom-endpoint'))) {
+                        const rsp = JSON.parse(xhrAccessor.get.call(this));
+                        cacheRoomInit(rsp);
+                        return JSON.stringify(interceptPlayurl(rsp));
+                    }
+                } catch (e) {
+                    console.error(e);
                 }
-            } catch (e) {
-                console.error(e);
-            }
-            return xhrAccessor.get.call(this);
-        },
-        set: function (str) {
-            return xhrAccessor.set.call(this, str);
-        },
-        configurable: true
-    });
+                return xhrAccessor.get.call(this);
+            },
+            set: function (str) {
+                return xhrAccessor.set.call(this, str);
+            },
+            configurable: true
+        });
+    } catch (e) {
+        console.error('[bililive-seeker] Falied to hook `XMLHttpRequest.responseText`, possibly due to effect of another script. auto-quality and force-flv may not work as intended:\n', e);
+    }
 
-    Object.defineProperty(window, '__NEPTUNE_IS_MY_WAIFU__', {
-        get: function () { return this._init_data_neptune },
-        set: function (newdata) {
-            if (newdata.roomInitRes.data?.playurl_info?.playurl?.stream) {
-                let playurl = newdata.roomInitRes.data.playurl_info.playurl;
-                if (getStoredValue('auto-quality')) {
-                    if (playurl.stream[0].format[0].codec[0].current_qn < 10000) {
-                        playurl = getPlayUrl(newdata.roomInitRes.data.room_id) || playurl;
-                        newdata.roomInitRes.data.playurl_info.playurl = playurl;
+    try {
+        Object.defineProperty(window, '__NEPTUNE_IS_MY_WAIFU__', {
+            get: function () { return this._init_data_neptune },
+            set: function (newdata) {
+                if (newdata.roomInitRes.data?.playurl_info?.playurl?.stream) {
+                    let playurl = newdata.roomInitRes.data.playurl_info.playurl;
+                    if (getStoredValue('auto-quality')) {
+                        if (playurl.stream[0].format[0].codec[0].current_qn < 10000) {
+                            playurl = getPlayUrl(newdata.roomInitRes.data.room_id) || playurl;
+                            newdata.roomInitRes.data.playurl_info.playurl = playurl;
+                        }
+                    }
+                    if (getStoredValue('force-flv')) {
+                        const filteredStream = playurl.stream.filter(i => i.protocol_name !== "http_hls");
+                        if (filteredStream.length) playurl.stream = filteredStream;
+                        playurl.stream.forEach(i => {
+                            i.format.forEach(j => {
+                                const filteredCodec = j.codec.filter(k => k.codec_name !== "hevc");
+                                if (filteredCodec.length) j.codec = filteredCodec;
+                            })
+                        });
                     }
                 }
-                if (getStoredValue('force-flv')) {
-                    const filteredStream = playurl.stream.filter(i => i.protocol_name !== "http_hls");
-                    if (filteredStream.length) playurl.stream = filteredStream;
-                    playurl.stream.forEach(i => {
-                        i.format.forEach(j => {
-                            const filteredCodec = j.codec.filter(k => k.codec_name !== "hevc");
-                            if (filteredCodec.length) j.codec = filteredCodec;
-                        })
-                    });
+                if (newdata.roomInitRes) {
+                    newdata.roomInitRes = interceptPlayurl(newdata.roomInitRes);
                 }
-            }
-            if (newdata.roomInitRes) {
-                newdata.roomInitRes = interceptPlayurl(newdata.roomInitRes);
-            }
-            this._init_data_neptune = newdata;
-            console.debug('init data', newdata);
-        }
-    });
+                this._init_data_neptune = newdata;
+                console.debug('[bililive-seeker] init data', newdata);
+            },
+            configurable: true,
+        });
+    } catch (e) {
+        console.error('[bililive-seeker] Falied to hook `__NEPTUNE_IS_MY_WAIFU__`, possibly due to effect of another script. auto-quality and force-flv may not work as intended:\n', e);
+    }
 
 
     // ----------------------- 选项UI -----------------------
 
     window.saveConfig = () => {
-        console.debug('config changed');
+        console.debug('[bililive-seeker] config changed');
         Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=checkbox]')).forEach(e => {
             localStorage.setItem(e.id, e.checked);
         });
@@ -522,7 +528,7 @@
             navigator.clipboard.writeText(value);
             e.innerText = '已复制';
         }
-        setTimeout(() => { e.innerText = '复制链接' }, 1000);
+        setTimeout(() => { e.innerText = '复制推流链接' }, 1000);
     }
     window.setPlayurl = () => {
         const value = prompt("请输入playurl json字符串或带query string的完整flv网址\n如出错请取消勾选强制原画；留空点击确定清除当前直播间设置");
@@ -549,9 +555,9 @@
                             })
                         })
                     });
-                    console.debug('parsed stream url to playurl', data);
+                    console.debug('[bililive-seeker] parsed stream url to playurl', data);
                 } else {
-                    console.debug('parsing playurl as json', value);
+                    console.debug('[bililive-seeker] parsing playurl as json', value);
                     data = JSON.parse(value);
                 }
                 if (data.cid !== room_id) {
