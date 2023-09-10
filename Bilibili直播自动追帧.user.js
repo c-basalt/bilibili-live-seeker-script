@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.6.19
+// @version      0.7.0
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -10,83 +10,128 @@
 // @homepageURL  https://github.com/c-basalt/bilibili-live-seeker-script/
 // @supportURL   https://space.bilibili.com/521676
 // @run-at       document-start
-// @grant        none
+// @grant        unsafeWindow
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_deleteValue
+// @grant        GM_listValues
 // ==/UserScript==
 
 (function () {
     'use strict';
+    const window = unsafeWindow;
+    const W = unsafeWindow;
+
+    const migrateConfig = () => {
+        const version = GM_getValue('version', 0);
+        if (version < 1) {
+            Object.entries({
+                'auto-AV-sync': 'boolean',
+                'hide-stats': 'boolean',
+                'auto-reload': 'boolean',
+                'force-flv': 'boolean',
+                'prevent-pause': 'boolean',
+                'force-raw': 'boolean',
+                'auto-quality': 'boolean',
+                'auto-speedup': 'boolean',
+                'auto-slowdown': 'boolean',
+                'block-roundplay': 'boolean',
+                'buffer-threshold': 'number',
+                'AV-resync-step': 'number',
+                'AV-resync-interval': 'number',
+                'speedup-thres': 'object',
+                'speeddown-thres': 'object',
+                'playurl-custom-endpoint': 'string',
+                'hide-seeker-control-panel': 'boolean',
+            }).forEach(([key, typeName]) => {
+                try {
+                    const value = typeName === 'string' ? localStorage.getItem(key) : JSON.parse(localStorage.getItem(key));
+                    console.log('migrate', key, value);
+                    if (typeof value === typeName) GM_setValue(key, value);
+                } catch (e) {
+                    console.error('[bililive-seeker] Failed to migrate setting for ' + key + '\n', e);
+                }
+            });
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key.match(/^playurl-\d+$/)) {
+                    try {
+                        const value = JSON.parse(localStorage.getItem(key));
+                        console.log('migrate', key, value);
+                        GM_setValue(key, value);
+                    } catch (e) {
+                        console.error('[bililive-seeker] Failed to migrate setting for ' + key + '\n', e);
+                    }
+                }
+            }
+        }
+        GM_setValue('version', 1);
+    }
+    migrateConfig();
 
     if (!location.href.match(/https:\/\/live\.bilibili\.com\/(blanc\/)?\d+/)) return;
     // 仅对直播间生效
 
+
     // ----------------------- 播放器追帧 -----------------------
 
     const getVideoElement = () => {
-        const e = document.getElementsByTagName('video')[0]
-        window.videoElement = e || window.videoElement;
-        return window.videoElement;
+        return document.getElementsByTagName('video')[0];
     }
 
-    const updatePlaybackRateDisplay = () => {
+    const updatePlaybackRateDisplay = (retries = 3) => {
         const v = getVideoElement();
         if (!v) {
-            setTimeout(updatePlaybackRateDisplay, 100);
+            if (retries > 0) {
+                console.debug('[bililive-seeker] Failed to find video element, update rate later');
+                setTimeout(() => { updatePlaybackRateDisplay(retries - 1) }, 100);
+            }
         } else {
             const usernameRate = document.querySelector('#playback-rate-username');
             if (!usernameRate) {
                 const e = document.querySelector('.room-owner-username');
-                e.style.lineHeight = 'normal';
-                e.innerHTML = e.innerHTML.match(/^([^<]+)(<|$)/)[1] + '<span id="playback-rate-username">　@' + v.playbackRate.toFixed(2) + '</span>'
+                if (e) {
+                    e.style.lineHeight = 'normal';
+                    e.innerHTML = e.innerHTML.match(/^([^<]+)(<|$)/)[1] + '<span id="playback-rate-username">　@' + v.playbackRate.toFixed(2) + '</span>'
+                }
             } else {
                 usernameRate.innerText = '　@' + v.playbackRate.toFixed(2);
             }
             const titleRate = document.querySelector('#playback-rate-title');
             if (!titleRate) {
                 const e2 = document.querySelector('.live-title .text');
-                e2.innerHTML = e2.innerHTML.match(/^([^<]+)(<|$)/)[1] + '<br><span id="playback-rate-title" style="display:none">@' + v.playbackRate.toFixed(2) + '</span>'
+                if (e2) {
+                    e2.innerHTML = e2.innerHTML.match(/^([^<]+)(<|$)/)[1] + '<br><span id="playback-rate-title" style="display:none">@' + v.playbackRate.toFixed(2) + '</span>'
+                }
             } else {
                 titleRate.innerText = '@' + v.playbackRate.toFixed(2);
             }
         }
     }
 
-    window.setRate = function (rate) {
+    const setRate = (rate) => {
         const e = getVideoElement()
         if (!e) return
-        if (e.playbackRate.toFixed(2) == Number(rate).toFixed(2)) return;
+        if (e.playbackRate.toFixed(2) === Number(rate).toFixed(2)) return;
         e.playbackRate = Number(rate).toFixed(2);
+        console.debug('[bililive-seeker] playback rate set to ' + e.playbackRate.toFixed(2));
         updatePlaybackRateDisplay();
     }
-    window.resetRate = function () {
-        window.setRate(1);
+
+    const resetRate = () => {
+        setRate(1);
     }
 
-    const statsBuffLen = () => {
-        const e = document.querySelector('#p-video-info-bufferLength');
-        if (!e) return null;
-        if (document.querySelector('.web-player-video-info-panel').style.display === 'none') return null;
-        const match = e.innerText.match(/Buffer Length:\s*([\d\.]+)s/);
-        if (!match) return null;
-        return Number(match[1]);
-    }
-
-    const videoBuffLen = () => {
+    const bufferlen = () => {
         const e = getVideoElement();
         if (!e) return null;
-        return e.buffered.end(0) - e.currentTime
-    }
-
-    window.bufferlen = function () {
-        const statsLen = statsBuffLen()
-        const videoLen = videoBuffLen()
-        if (statsLen && videoLen) {
-            if (Math.abs(statsLen - videoLen) > 2) {
-                return statsLen;
-            } else {
-                return videoLen
-            }
+        try {
+            const buffer_len = Number(e.buffered.end(0) - e.currentTime);
+            return (!Number.isNaN(buffer_len))? buffer_len : null;
+        } catch (e) {
+            console.error('[bililive-seeker] failed to get buffer length\n', e);
+            return null;
         }
-        return videoLen || statsLen;
     }
 
     const adjustSpeedup = () => {
@@ -96,21 +141,21 @@
             if (!isLiveStream()) return;
             const speedUpChecked = isChecked('auto-speedup');
             if (!speedUpChecked) {
-                if (speedUpChecked === false && getVideoElement()?.playbackRate > 1) window.resetRate();
+                if (speedUpChecked === false && getVideoElement()?.playbackRate > 1) resetRate();
                 return;
             }
-            const bufferLen = window.bufferlen()
+            const bufferLen = bufferlen()
             if (bufferLen === null) return;
             let diffThres, rate;
             const speedupThres = getStoredValue('speedup-thres');
             for (let i = 0; i < speedupThres.length; i++) {
                 [diffThres, rate] = speedupThres[i];
                 if (bufferLen - thres > diffThres) {
-                    window.setRate(rate);
+                    setRate(rate);
                     return;
                 }
             }
-            if (getVideoElement()?.playbackRate > 1) window.resetRate();
+            if (getVideoElement()?.playbackRate > 1) resetRate();
         } catch (e) {
             console.error('[bililive-seeker] Unexpected error when speeding up:\n', e)
         }
@@ -121,21 +166,21 @@
             if (!isLiveStream()) return;
             const slowDownChecked = isChecked('auto-slowdown');
             if (!slowDownChecked) {
-                if (slowDownChecked === false && getVideoElement()?.playbackRate < 1) window.resetRate();
+                if (slowDownChecked === false && getVideoElement()?.playbackRate < 1) resetRate();
                 return;
             }
-            const bufferLen = window.bufferlen()
+            const bufferLen = bufferlen()
             if (bufferLen === null) return;
             let thres, rate;
             const speeddownThres = getStoredValue('speeddown-thres');
             for (let i = 0; i < speeddownThres.length; i++) {
                 [thres, rate] = speeddownThres[i];
                 if (bufferLen < thres) {
-                    window.setRate(rate);
+                    setRate(rate);
                     return;
                 }
             }
-            if (getVideoElement()?.playbackRate < 1) window.resetRate();
+            if (getVideoElement()?.playbackRate < 1) resetRate();
         } catch (e) {
             console.error('[bililive-seeker] Unexpected error when speeding down:\n', e)
         }
@@ -146,58 +191,78 @@
 
     // ----------------------- 获取参数 -----------------------
 
+    const defaultValues = {
+        'auto-AV-sync': false,
+        'hide-stats': false,
+        'auto-reload': true,
+        'force-flv': true,
+        'prevent-pause': false,
+        'force-raw': false,
+        'auto-quality': true,
+        'auto-speedup': true,
+        'auto-slowdown': true,
+        'block-roundplay': false,
+        'buffer-threshold': 1.5,
+        'AV-resync-step': 0.05,
+        'AV-resync-interval': 300,
+        'speedup-thres': [[2, 1.3], [1, 1.2], [0, 1.1]],
+        'speeddown-thres': [[0.2, 0.1], [0.3, 0.3], [0.6, 0.6]],
+        'hide-seeker-control-panel': false,
+    };
+
     const getStoredValue = (key) => {
-        const defaultValues = {
-            'auto-AV-sync': false,
-            'hide-stats': false,
-            'auto-reload': true,
-            'force-flv': true,
-            'prevent-pause': false,
-            'force-raw': false,
-            'auto-quality': true,
-            'auto-speedup': true,
-            'auto-slowdown': true,
-            'block-roundplay': false,
-            'buffer-threshold': 1.5,
-            'AV-resync-step': 0.05,
-            'AV-resync-interval': 300,
-            'speedup-thres': [[2, 1.3], [1, 1.2], [0, 1.1]],
-            'speeddown-thres': [[0.2, 0.1], [0.3, 0.3], [0.6, 0.6]],
-        };
-        try {
-            const value = JSON.parse(localStorage.getItem(key));
-            if (value !== null) return value;
-            return defaultValues[key];
-        } catch {
-            return defaultValues[key];
-        }
+        return GM_getValue(key, defaultValues[key])
+    };
+    const setStoredValue = (key, value) => {
+        GM_setValue(key, value);
+    };
+    const deleteStoredValue = (key) => {
+        GM_deleteValue(key);
+    };
+    const listStoredKeys = (func) => {
+        return GM_listValues();
+    };
+    const clearStoredValues = () => {
+        listStoredKeys().forEach(key => { deleteStoredValue(key) });
+        setStoredValue('version', 1);
     }
-    window.getStoredValue = getStoredValue;
+
     const isChecked = (key, fallback) => {
         const e = document.querySelector('#' + key);
         if (e && (typeof e?.checked === 'boolean')) return e.checked;
-        if (fallback) return getStoredValue(key);
+        if (fallback) {
+            const value = getStoredValue(key);
+            return (typeof value === 'boolean')? value : defaultValues[key];
+        }
         return null;
-    }
+    };
     const getValue = (key, fallback) => {
         const e = document.querySelector('#' + key);
-        const value = Number(e?.value);
+        let value = Number(e?.value);
         if (!Number.isNaN(value)) return value;
-        if (fallback) return getStoredValue(key);
+        if (fallback) {
+            value = Number(getStoredValue(key));
+            return (!Number.isNaN(value))? value : defaultValues[key];
+        }
         return null;
-    }
+    };
     const isLiveStream = () => {
         if (document.querySelector('.web-player-round-title')?.innerText) return false; // 轮播
         if (document.querySelector('.web-player-ending-panel')?.innerText) return false; // 闲置或轮播阻断
         const e = document.querySelector('video');
         if (!e) return undefined; // 网页加载
         return true; // 直播
-    }
+    };
     const getRoomId = () => {
         const _getRoomId = () => window.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id || window.__roomInitRes?.data?.room_id;
         if (!_getRoomId()) getRoomInit();
-        return _getRoomId() || Number(location.href.match(/\/(\d+)/)[1]);
-    }
+        try {
+            return _getRoomId() || Number(location.href.match(/\/(\d+)/)[1]);
+        } catch (e) {
+            console.error('[bililive-seeker] Failed to get room id\n', e)
+            return null;
+        }
+    };
 
 
     // ----------------------- 音画同步重置 -----------------------
@@ -228,7 +293,7 @@
         if (v && isLiveStream()) {
             if (v.paused) {
                 const thres = getValue('buffer-threshold');
-                const bufferLen = window.bufferlen();
+                const bufferLen = bufferlen();
                 if (thres && bufferLen && thres > bufferLen) return;
                 v.play();
             }
@@ -256,7 +321,7 @@
     const checkIsLiveReload = (timeout) => {
         if (!isChecked('auto-reload')) return
         if (isLiveStream() === false) {
-            fetch("https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=" + getRoomId() + "&protocol=0&format=0,1,2&codec=0&qn=10000&platform=web")
+            window.fetch("https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=" + getRoomId() + "&protocol=0&format=0,1,2&codec=0&qn=10000&platform=web")
                 .then(r => r.json())
                 .then(r => {
                     console.debug('[bililive-seeker] live status', r.data?.live_status);
@@ -331,10 +396,10 @@
             console.debug('[bililive-seeker] playurl', playurl);
             const baseurl = playurl.stream[0].format[0].codec[0].base_url;
             const qn = playurl.stream[0].format[0].codec[0].current_qn;
-            if (qn === 10000 && baseurl.match(/\/live_\d+_\d+\.flv/)) {
+            if (qn === 10000 && baseurl.match(/\/live_\d+(?:_bs)?_\d+(?:_[0-9a-f]{8})?\.flv/)) {
                 // 未二压的链接格式
-                console.debug('[bililive-seeker] raw stream url', baseurl);
-                localStorage.setItem('playurl-' + playurl.cid, JSON.stringify(playurl));
+                console.debug('[bililive-seeker] caching raw stream url', baseurl);
+                setStoredValue('playurl-' + playurl.cid, playurl);
             }
         } catch (e) {
             console.error('[bililive-seeker] Unexpected error when caching playurl:\n', e);
@@ -342,15 +407,21 @@
     }
 
     const expiredPlayurlChecker = () => {
-        const keys = Array.from(Array(localStorage.length).keys()).map(i => localStorage.key(i));
-        keys.filter(i => i.match(/^playurl-\d+/)).forEach(i => {
-            const cachedUrl = JSON.parse(localStorage.getItem(i));
-            const expireTs = Number(cachedUrl.stream[0].format[0].codec[0].url_info[0].extra.match(/expires=(\d+)/)[1]);
-            if (Date.now() / 1000 > expireTs) localStorage.removeItem(i);
-        })
+        listStoredKeys().filter(key => key.match(/^playurl-\d+$/)).forEach(key => {
+            try {
+                const expireTs = getStoredValue(key).stream[0].format[0].codec[0].url_info[0].extra.match(/expires=(\d+)/)[1];
+                if (!(Date.now() / 1000 < Number(expireTs))) {
+                    console.log('[bililive-seeker] remove expired playurl');
+                    deleteStoredValue(key);
+                }
+            } catch (e) {
+                console.warn('[bililive-seeker] Failed to validate cached playurl. Removing from cache.\n', e);
+                deleteStoredValue(key);
+            }
+        });
         setTimeout(() => {
             const room_id = getRoomId();
-            if (!localStorage.getItem('playurl-' + room_id)) {
+            if (!getStoredValue('playurl-' + room_id)) {
                 document.querySelector('#force-raw').style = 'filter: grayscale(1) brightness(1.5)';
             } else {
                 document.querySelector('#force-raw').style = '';
@@ -361,29 +432,28 @@
 
     const interceptPlayurl = (r) => {
         const playurl = r.data?.playurl_info?.playurl;
-        cachePlayUrl(playurl);
         if (!playurl) return r;
-        console.debug('[bililive-seeker] playinfo', r);
+        cachePlayUrl(playurl);
+        console.debug('[bililive-seeker] got playinfo', r);
         if (!isChecked('force-raw', true)) return r;
         expiredPlayurlChecker();
-        const cachedUrl = JSON.parse(localStorage.getItem('playurl-' + playurl.cid));
+        const cachedUrl = getStoredValue('playurl-' + playurl.cid);
         console.debug('[bililive-seeker] load cached url', cachedUrl);
-        if (!cachedUrl) return r;
-        r.data.playurl_info.playurl = cachedUrl;
+        if (cachedUrl) r.data.playurl_info.playurl = cachedUrl;
         return r;
     }
 
     const replaceRoomplayReqUrl = (url) => {
-        if (getStoredValue('auto-quality')) {
+        if (isChecked('auto-quality', true)) {
             url = url.replace(/qn=0\b/, 'qn=10000');
         }
         if (isChecked('force-flv', true)) {
             url = url.replace(/protocol=0,[^&]+/, 'protocol=0');
             url = url.replace(/codec=0,[^&]+/, 'codec=0');
         }
-        if (localStorage.getItem('playurl-custom-endpoint')) {
+        if (getStoredValue('playurl-custom-endpoint')) {
             url = url.replace(/^\/\//, 'https://');
-            url = url.replace('https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo', localStorage.getItem('playurl-custom-endpoint'));
+            url = url.replace('https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo', getStoredValue('playurl-custom-endpoint'));
             console.debug('[bililive-seeker] replacing API endpoint', url);
         }
         return url;
@@ -418,7 +488,7 @@
                     return new Response('success');
                 }
             } catch (e) {
-                console.error(e);
+                console.error('[bililive-seeker] error from hooked fetch request\n', e);
             }
             return origFetch.apply(this, arguments);
         }
@@ -442,7 +512,7 @@
                 arguments[1] = url;
             }
         } catch (e) {
-            console.error(e);
+            console.error('[bililive-seeker] error from hooked `xhr.open`\n', e);
         }
         return origOpen.apply(this, arguments);
     }
@@ -452,13 +522,13 @@
         Object.defineProperty(XMLHttpRequest.prototype, 'responseText', {
             get: function () {
                 try {
-                    if (this.responseURL.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo') || this.responseURL.match(localStorage.getItem('playurl-custom-endpoint'))) {
+                    if (this.responseURL.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo') || this.responseURL.match(getStoredValue('playurl-custom-endpoint') || null)) {
                         const rsp = JSON.parse(xhrAccessor.get.call(this));
                         cacheRoomInit(rsp);
                         return JSON.stringify(interceptPlayurl(rsp));
                     }
                 } catch (e) {
-                    console.error(e);
+                    console.error('[bililive-seeker] error from hooked xhr.responseText\n', e);
                 }
                 return xhrAccessor.get.call(this);
             },
@@ -512,15 +582,16 @@
     window.saveConfig = () => {
         console.debug('[bililive-seeker] config changed');
         Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=checkbox]')).forEach(e => {
-            localStorage.setItem(e.id, e.checked);
+            setStoredValue(e.id, Boolean(e.checked));
         });
         Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=number]')).forEach(e => {
-            localStorage.setItem(e.id, e.value);
+            setStoredValue(e.id, Number(e.value));
         });
     }
     window.copyPlayurl = () => {
         const room_id = getRoomId();
-        const value = localStorage.getItem('playurl-' + room_id);
+        if (!room_id) return;
+        const value = JSON.stringify(getStoredValue('playurl-' + room_id));
         const e = document.querySelector('#copy-playurl');
         if (!value) {
             e.innerText = '无原画';
@@ -535,7 +606,7 @@
         if (value === null) return;
         const room_id = getRoomId();
         if (value === "") {
-            localStorage.removeItem('playurl-' + room_id);
+            deleteStoredValue('playurl-' + room_id);
             expiredPlayurlChecker();
         } else {
             try {
@@ -563,7 +634,7 @@
                 if (data.cid !== room_id) {
                     if (!confirm("json的房间号" + data.cid + "可能不符，是否依然为当前房间" + room_id + "设置？")) return
                 }
-                localStorage.setItem('playurl-' + room_id, JSON.stringify(data));
+                setStoredValue('playurl-' + room_id, data);
                 expiredPlayurlChecker();
             } catch (e) {
                 alert('json字符串/flv链接解析失败\n' + e);
@@ -572,12 +643,13 @@
         }
     }
     window.setEndpoint = () => {
-        const value = prompt("请输入获取playurl所用的自定义API endpoint，用以替换默认的`https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo`\n如出错请留空点击确定恢复默认API");
-        if (value === null) return;
+        const url = getStoredValue('playurl-custom-endpoint') || "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo";
+        const value = prompt("请输入获取playurl所用的自定义API endpoint，用以替换默认的`https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo`\n如出错请留空点击确定恢复默认API", url);
+        if (value === null || value === url) return;
         if (value === "") {
-            localStorage.removeItem('playurl-custom-endpoint');
+            deleteStoredValue('playurl-custom-endpoint');
         } else {
-            localStorage.setItem('playurl-custom-endpoint', value);
+            setStoredValue('playurl-custom-endpoint', value);
         }
     }
     window.setSpeedUpThres = () => {
@@ -585,11 +657,11 @@
         const value = prompt("请输入想要设定的追帧加速阈值\nJSON格式为[[缓冲长度阈值(秒), 播放速率],...]\n留空点击确定以恢复默认值", storedThres);
         if (value === null || value === storedThres) return;
         if (value === "") {
-            localStorage.removeItem('speedup-thres');
+            deleteStoredValue('speedup-thres');
         } else {
             try {
                 const newThres = JSON.parse(value);
-                localStorage.setItem('speedup-thres', JSON.stringify(newThres));
+                setStoredValue('speedup-thres', newThres);
             } catch (e) {
                 alert("设置失败\n" + e);
                 console.error(e);
@@ -601,11 +673,11 @@
         const value = prompt("请输入想要设定的自动减速阈值\nJSON格式为[[缓冲长度阈值(秒), 播放速率],...]\n留空点击确定以恢复默认值", storedThres);
         if (value === null || value === storedThres) return;
         if (value === "") {
-            localStorage.removeItem('speeddown-thres');
+            deleteStoredValue('speeddown-thres');
         } else {
             try {
                 const newThres = JSON.parse(value);
-                localStorage.setItem('speeddown-thres', JSON.stringify(newThres));
+                setStoredValue('speeddown-thres', newThres);
             } catch (e) {
                 alert("设置失败\n" + e);
                 console.error(e);
@@ -626,7 +698,12 @@
             }
         }
     }
-    waitForElement(() => document.querySelector('#head-info-vm .lower-row'), (node) => {
+
+    const waitForQuery = (query, exec, timeout) => {
+        waitForElement(() => document.querySelector(query), exec, timeout)
+    }
+
+    waitForQuery('#head-info-vm .lower-row', (node) => {
         const e = document.createElement("span");
         e.innerHTML = (
             '<span id="basic-settings-page">' +
@@ -782,7 +859,7 @@
         expiredPlayurlChecker();
     })
 
-    waitForElement(() => document.querySelector('#head-info-vm .lower-row .right-ctnr'), node => {
+    waitForQuery('#head-info-vm .lower-row .right-ctnr', node => {
         const getBottom = (e) => { const rect = e.getBoundingClientRect(); return rect.y + rect.height; }
         const getTop = (e) => { const rect = e.getBoundingClientRect(); return rect.y }
         const observer = new ResizeObserver((entries) => {
@@ -790,13 +867,13 @@
             if (getTop(node.children[node.children.length - 1]) >= getBottom(node.children[0])) {
                 node.style.marginTop = '-20px';
                 node.style.alignItems = 'flex-end';
-                waitForElement(() => document.querySelector('#playback-rate-username'), node => { node.style.display = 'none'; }, 100);
-                waitForElement(() => document.querySelector('#playback-rate-title'), node => { node.style.display = ''; }, 100);
+                waitForQuery('#playback-rate-username', node => { node.style.display = 'none'; }, 100);
+                waitForQuery('#playback-rate-title', node => { node.style.display = ''; }, 100);
             } else {
                 node.style.marginTop = '';
                 node.style.alignItems = '';
-                waitForElement(() => document.querySelector('#playback-rate-username'), node => { node.style.display = ''; }, 100);
-                waitForElement(() => document.querySelector('#playback-rate-title'), node => { node.style.display = 'none'; }, 100);
+                waitForQuery('#playback-rate-username', node => { node.style.display = ''; }, 100);
+                waitForQuery('#playback-rate-title', node => { node.style.display = 'none'; }, 100);
             }
         });
         observer.observe(node);
@@ -804,39 +881,40 @@
 
     const updatePanelHideState = () => {
         if (getStoredValue('hide-seeker-control-panel')) {
-            waitForElement(() => document.querySelector('#seeker-control-panel'), node => { node.style.display = 'none'; });
-            waitForElement(() => document.querySelector('#control-panel-showhide span'), node => { node.innerText = '显示追帧'; });
-            waitForElement(() => document.querySelector('#head-info-vm .upper-row .right-ctnr'), node => { node.style.marginTop = ''; });
-            waitForElement(() => document.querySelector('#head-info-vm .lower-row'), node => { node.style.marginTop = ''; });
-            waitForElement(() => document.querySelector('#head-info-vm .lower-row .right-ctnr'), node => { node.style.flex = ''; node.style.flexWrap = ''; node.style.placeContent = ''; node.style.rowGap = ''; });
+            waitForQuery('#seeker-control-panel', node => { node.style.display = 'none'; });
+            waitForQuery('#control-panel-showhide span', node => { node.innerText = '显示追帧'; });
+            waitForQuery('#head-info-vm .upper-row .right-ctnr', node => { node.style.marginTop = ''; });
+            waitForQuery('#head-info-vm .lower-row', node => { node.style.marginTop = ''; });
+            waitForQuery('#head-info-vm .lower-row .right-ctnr', node => { node.style.flex = ''; node.style.flexWrap = ''; node.style.placeContent = ''; node.style.rowGap = ''; });
 
-            waitForElement(() => document.querySelector('#head-info-vm .lower-row .pk-act-left-distance'), node => { node.style.maxWidth = ''; }, 15000);
-            waitForElement(() => document.querySelector('#head-info-vm .lower-row .act-left-distance'), node => { node.style.maxWidth = ''; }, 15000);
-            waitForElement(() => document.querySelector('#head-info-vm .lower-row .gift-planet-entry'), node => { node.style.marginLeft = ''; }, 15000);
+            waitForQuery('#head-info-vm .lower-row .pk-act-left-distance', node => { node.style.maxWidth = ''; }, 15000);
+            waitForQuery('#head-info-vm .lower-row .act-left-distance', node => { node.style.maxWidth = ''; }, 15000);
+            waitForQuery('#head-info-vm .lower-row .gift-planet-entry', node => { node.style.marginLeft = ''; }, 15000);
         } else {
-            waitForElement(() => document.querySelector('#seeker-control-panel'), node => { node.style.display = ''; });
-            waitForElement(() => document.querySelector('#control-panel-showhide span'), node => { node.innerText = '隐藏追帧'; });
-            waitForElement(() => document.querySelector('#head-info-vm .upper-row .right-ctnr'), node => { node.style.marginTop = '-7px'; });
-            waitForElement(() => document.querySelector('#head-info-vm .lower-row'), node => { node.style.marginTop = '0px'; });
-            waitForElement(() => document.querySelector('#head-info-vm .lower-row .right-ctnr'), node => { node.style.flex = '100 1 auto'; node.style.flexWrap = 'wrap'; node.style.placeContent = 'space-around center'; node.style.rowGap = '5px'; });
+            waitForQuery('#seeker-control-panel', node => { node.style.display = ''; });
+            waitForQuery('#control-panel-showhide span', node => { node.innerText = '隐藏追帧'; });
+            waitForQuery('#head-info-vm .upper-row .right-ctnr', node => { node.style.marginTop = '-7px'; });
+            waitForQuery('#head-info-vm .lower-row', node => { node.style.marginTop = '0px'; });
+            waitForQuery('#head-info-vm .lower-row .right-ctnr', node => { node.style.flex = '100 1 auto'; node.style.flexWrap = 'wrap'; node.style.placeContent = 'space-around center'; node.style.rowGap = '5px'; });
 
-            waitForElement(() => document.querySelector('#head-info-vm .lower-row .pk-act-left-distance'), node => { node.style.maxWidth = '3px'; }, 15000);
-            waitForElement(() => document.querySelector('#head-info-vm .lower-row .act-left-distance'), node => { node.style.maxWidth = '3px'; }, 15000);
-            waitForElement(() => document.querySelector('#head-info-vm .lower-row .gift-planet-entry'), node => { node.style.marginLeft = '5px'; }, 15000);
+            waitForQuery('#head-info-vm .lower-row .pk-act-left-distance', node => { node.style.maxWidth = '3px'; }, 15000);
+            waitForQuery('#head-info-vm .lower-row .act-left-distance', node => { node.style.maxWidth = '3px'; }, 15000);
+            waitForQuery('#head-info-vm .lower-row .gift-planet-entry', node => { node.style.marginLeft = '5px'; }, 15000);
         }
     }
 
-    waitForElement(() => document.querySelector('#head-info-vm .upper-row .right-ctnr'), (node) => {
+    waitForQuery('#head-info-vm .upper-row .right-ctnr', node => {
         const e = document.createElement("div");
         e.id = 'control-panel-showhide';
         e.className = "icon-ctnr live-skin-normal-a-text pointer";
         e.innerHTML = '<i class="v-middle icon-font icon-danmu-a" style="margin-left:16px; font-size:16px;"></i><span class="action-text v-middle" style="margin-left:8px; font-size:12px;"></span>';
         e.onclick = () => {
-            localStorage.setItem('hide-seeker-control-panel', !getStoredValue('hide-seeker-control-panel'));
+            setStoredValue('hide-seeker-control-panel', !getStoredValue('hide-seeker-control-panel'));
             updatePanelHideState();
         }
         node.appendChild(e);
         updatePanelHideState();
     })
+
 
 })();
