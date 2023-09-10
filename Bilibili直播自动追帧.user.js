@@ -427,7 +427,7 @@
     hookFetch();
     const checkHookAlive = async () => {
         for (let i = 0; i < 50; i++) {
-            await fetch('//_test_hook_alive_dummy_url/').catch(e => { hookFetch(); });
+            await window.fetch('//_test_hook_alive_dummy_url/').catch(e => { hookFetch(); });
             await new Promise(r => setTimeout(r, 100));
         }
     }
