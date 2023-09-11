@@ -54,14 +54,14 @@
             });
             for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
-                if (key.match(/^playurl-\d+$/)) {
-                    try {
+                try {
+                    if (key.match(/^playurl-\d+$/)) {
                         const value = JSON.parse(localStorage.getItem(key));
                         console.log('migrate', key, value);
                         GM_setValue(key, value);
-                    } catch (e) {
-                        console.error('[bililive-seeker] Failed to migrate setting for ' + key + '\n', e);
                     }
+                } catch (e) {
+                    console.error('[bililive-seeker] Failed to migrate setting for ' + key + '\n', e);
                 }
             }
         }
@@ -71,6 +71,77 @@
 
     if (!location.href.match(/https:\/\/live\.bilibili\.com\/(blanc\/)?\d+/)) return;
     // 仅对直播间生效
+
+
+    // ----------------------- 获取参数 -----------------------
+
+    const defaultValues = {
+        'auto-AV-sync': false,
+        'hide-stats': false,
+        'auto-reload': true,
+        'force-flv': true,
+        'prevent-pause': false,
+        'force-raw': false,
+        'auto-quality': true,
+        'auto-speedup': true,
+        'auto-slowdown': true,
+        'block-roundplay': false,
+        'buffer-threshold': 1.5,
+        'AV-resync-step': 0.05,
+        'AV-resync-interval': 300,
+        'speedup-thres': [[2, 1.3], [1, 1.2], [0, 1.1]],
+        'speeddown-thres': [[0.2, 0.1], [0.3, 0.3], [0.6, 0.6]],
+        'hide-seeker-control-panel': false,
+    };
+
+    const getStoredValue = (key) => {
+        return GM_getValue(key, defaultValues[key])
+    };
+    const setStoredValue = (key, value) => {
+        GM_setValue(key, value);
+    };
+    const deleteStoredValue = (key) => {
+        GM_deleteValue(key);
+    };
+    const listStoredKeys = (func) => {
+        return GM_listValues();
+    };
+    const clearStoredValues = () => {
+        listStoredKeys().forEach(key => { deleteStoredValue(key) });
+        // setStoredValue('version', 1);
+    }
+    W.clearStoredValues = clearStoredValues;
+
+    const isChecked = (key, fallback) => {
+        const e = document.querySelector('#' + key);
+        if (e && (typeof e?.checked === 'boolean')) return e.checked;
+        if (fallback) {
+            const value = getStoredValue(key);
+            return (typeof value === 'boolean')? value : defaultValues[key];
+        }
+        return null;
+    };
+    const getValue = (key, fallback) => {
+        const e = document.querySelector('#' + key);
+        let value = Number(e?.value);
+        if (!Number.isNaN(value)) return value;
+        if (fallback) {
+            value = Number(getStoredValue(key));
+            return (!Number.isNaN(value))? value : defaultValues[key];
+        }
+        return null;
+    };
+    let room_init_res_cache;
+    const getRoomId = () => {
+        const _getRoomId = () => W.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id || room_init_res_cache?.data?.room_id;
+        if (!_getRoomId()) getRoomInit();
+        try {
+            return _getRoomId() || Number(location.href.match(/\/(\d+)/)[1]);
+        } catch (e) {
+            console.error('[bililive-seeker] Failed to get room id\n', e)
+            return null;
+        }
+    };
 
 
     // ----------------------- 播放器追帧 -----------------------
@@ -191,77 +262,6 @@
     }
     const speedUpIntervalId = setInterval(() => { adjustSpeedup() }, 300)
     const speedDownIntervalId = setInterval(() => { adjustSpeeddown() }, 50)
-
-
-    // ----------------------- 获取参数 -----------------------
-
-    const defaultValues = {
-        'auto-AV-sync': false,
-        'hide-stats': false,
-        'auto-reload': true,
-        'force-flv': true,
-        'prevent-pause': false,
-        'force-raw': false,
-        'auto-quality': true,
-        'auto-speedup': true,
-        'auto-slowdown': true,
-        'block-roundplay': false,
-        'buffer-threshold': 1.5,
-        'AV-resync-step': 0.05,
-        'AV-resync-interval': 300,
-        'speedup-thres': [[2, 1.3], [1, 1.2], [0, 1.1]],
-        'speeddown-thres': [[0.2, 0.1], [0.3, 0.3], [0.6, 0.6]],
-        'hide-seeker-control-panel': false,
-    };
-
-    const getStoredValue = (key) => {
-        return GM_getValue(key, defaultValues[key])
-    };
-    const setStoredValue = (key, value) => {
-        GM_setValue(key, value);
-    };
-    const deleteStoredValue = (key) => {
-        GM_deleteValue(key);
-    };
-    const listStoredKeys = (func) => {
-        return GM_listValues();
-    };
-    const clearStoredValues = () => {
-        listStoredKeys().forEach(key => { deleteStoredValue(key) });
-        // setStoredValue('version', 1);
-    }
-    W.clearStoredValues = clearStoredValues;
-
-    const isChecked = (key, fallback) => {
-        const e = document.querySelector('#' + key);
-        if (e && (typeof e?.checked === 'boolean')) return e.checked;
-        if (fallback) {
-            const value = getStoredValue(key);
-            return (typeof value === 'boolean')? value : defaultValues[key];
-        }
-        return null;
-    };
-    const getValue = (key, fallback) => {
-        const e = document.querySelector('#' + key);
-        let value = Number(e?.value);
-        if (!Number.isNaN(value)) return value;
-        if (fallback) {
-            value = Number(getStoredValue(key));
-            return (!Number.isNaN(value))? value : defaultValues[key];
-        }
-        return null;
-    };
-    let room_init_res_cache;
-    const getRoomId = () => {
-        const _getRoomId = () => W.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id || room_init_res_cache?.data?.room_id;
-        if (!_getRoomId()) getRoomInit();
-        try {
-            return _getRoomId() || Number(location.href.match(/\/(\d+)/)[1]);
-        } catch (e) {
-            console.error('[bililive-seeker] Failed to get room id\n', e)
-            return null;
-        }
-    };
 
 
     // ----------------------- 音画同步重置 -----------------------
