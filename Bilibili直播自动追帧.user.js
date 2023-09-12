@@ -203,15 +203,15 @@
     /** @param {HTMLVideoElement} v * @param {any} rate */
     const setRate = (v, rate) => {
         const _rate = Number(rate);
-        if (Number.isNaN(_rate) || _rate <= 0) return;
+        if (Number.isNaN(_rate) || !_rate) return;
         if (v.playbackRate.toFixed(2) === _rate.toFixed(2)) return;
-        v.playbackRate = _rate.toFixed(2);
+        v.playbackRate = _rate;
         updatePlaybackRateDisplay(v.playbackRate.toFixed(2));
     }
 
     /** @param {HTMLVideoElement} v */
     const resetRate = (v) => {
-        setRate(v, 1);
+        setRate(v, 1.0);
     }
 
     /** @param {HTMLVideoElement} v */
@@ -287,7 +287,7 @@
 
     /** @type {number|undefined} */
     let avResyncIntervalId;
-    W.AVResync = () => {
+    const AVResync = () => {
         console.debug("[bililive-seeker] enforce AV sync")
         const v = getLiveVideoElement();
         const step = getValue('AV-resync-step', true);
@@ -301,7 +301,7 @@
     const startAutoResync = () => {
         stopAutoResync();
         console.debug("[bililive-seeker] start AV sync interval")
-        avResyncIntervalId = setInterval(() => { W.AVResync() }, getValue("AV-resync-interval", true) * 1000);
+        avResyncIntervalId = setInterval(() => { AVResync() }, getValue("AV-resync-interval", true) * 1000);
     }
 
 
@@ -328,7 +328,7 @@
                 setTimeout(() => { offLiveAutoReload({ lastChat: chatHistory }) }, timeout)
             } else {
                 if (chatHistory === lastChat) {
-                    setTimeout(() => { window.location.reload(); }, 5000);
+                    setTimeout(() => { W.location.reload(); }, 5000);
                     document.querySelector('label[for="auto-reload"]').classList.add('danmaku-lost');
                 } else {
                     console.debug('[bililive-seeker] chat history changed');
@@ -353,7 +353,7 @@
                         return;
                     } else {
                         if (reloadLabel) reloadLabel.classList.add('reload');
-                        window.location.reload();
+                        W.location.reload();
                     }
                 }
             });
@@ -372,7 +372,7 @@
                 return;
             } else {
                 if (reloadLabel) reloadLabel.classList.add('reload');
-                window.location.reload();
+                W.location.reload();
             }
         }
         document.querySelector('label[for="auto-reload"]').classList.remove('video-error');
@@ -393,6 +393,8 @@
             request.send(null);
             if (request.status === 200) {
                 return JSON.parse(request.responseText);
+            } else {
+                console.error('[bililive-seeker] request failed with status ' + request.status + ' for ' + url);
             }
         } catch (e) {
             console.error('[bililive-seeker] failed to get data from ' + url + '\n', e);
@@ -497,20 +499,12 @@
         const origFetch = W.fetch;
         W.fetch = async function () {
             try {
+                /** @type {URL | RequestInfo} */
                 const resource = arguments[0];
-                let url;
-                if (resource instanceof Request) {
-                    url = resource.url;
-                } else {
-                    url = resource
-                }
+                let url = (resource instanceof Request)? resource.url : resource.toString();
                 if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
                     url = replaceRoomplayReqUrl(url);
-                    if (resource instanceof Request) {
-                        arguments[0] = new Request(url, resource);
-                    } else {
-                        arguments[0] = url;
-                    }
+                    arguments[0] = (resource instanceof Request)? new Request(url, resource) : url;
                     console.debug('[bililive-seeker] fetch request', arguments);
                     const response = await origFetch.apply(this, arguments);
                     const r = interceptPlayurl(await response.clone().json());
@@ -528,27 +522,37 @@
         }
         console.debug('[bililive-seeker] `window.fetch` hooked');
     }
-    hookFetch();
     const checkHookAlive = async () => {
-        for (let i = 0; i < 50; i++) {
-            await W.fetch('//_test_hook_alive_dummy_url/').catch(e => { hookFetch(); });
-            await new Promise(r => setTimeout(r, 100));
+        try {
+            hookFetch();
+            for (let i = 0; i < 50; i++) {
+                await W.fetch('//_test_hook_alive_dummy_url/').catch(e => { hookFetch(); });
+                await new Promise(r => setTimeout(r, 100));
+            }
+        } catch (e) {
+            console.error('[bililive-seeker] error while hooking `window.fetch`\n', e);
         }
     }
     checkHookAlive();
 
-    const origOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function () {
-        try {
-            let url = arguments[1];
-            if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
-                url = replaceRoomplayReqUrl(url);
-                arguments[1] = url;
+    try {
+        const origOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function () {
+            try {
+                /** @type {string|URL} */
+                let url = arguments[1];
+                url = url.toString();
+                if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
+                    url = replaceRoomplayReqUrl(url);
+                    arguments[1] = url;
+                }
+            } catch (e) {
+                console.error('[bililive-seeker] error from hooked `xhr.open`\n', e);
             }
-        } catch (e) {
-            console.error('[bililive-seeker] error from hooked `xhr.open`\n', e);
+            return origOpen.apply(this, arguments);
         }
-        return origOpen.apply(this, arguments);
+    } catch (e) {
+        console.error('[bililive-seeker] Falied to hook `XMLHttpRequest.open`\n', e);
     }
 
     try {
@@ -576,18 +580,21 @@
     }
 
     try {
+        let __init_data_neptune;
         Object.defineProperty(W, '__NEPTUNE_IS_MY_WAIFU__', {
-            get: function () { return this._init_data_neptune },
+            get: function () { return __init_data_neptune },
             set: function (newdata) {
-                if (newdata.roomInitRes.data?.playurl_info?.playurl?.stream) {
+                if (newdata.roomInitRes?.data?.playurl_info?.playurl?.stream) {
                     let playurl = newdata.roomInitRes.data.playurl_info.playurl;
                     if (getStoredValue('auto-quality')) {
+                        console.debug('[bililive-seeker] getting original quality');
                         if (playurl.stream[0].format[0].codec[0].current_qn < 10000) {
                             playurl = getPlayUrl(newdata.roomInitRes.data.room_id) || playurl;
                             newdata.roomInitRes.data.playurl_info.playurl = playurl;
                         }
                     }
                     if (getStoredValue('force-flv')) {
+                        console.debug('[bililive-seeker] filter video formats');
                         const filteredStream = playurl.stream.filter(i => i.protocol_name !== "http_hls");
                         if (filteredStream.length) playurl.stream = filteredStream;
                         playurl.stream.forEach(i => {
@@ -601,8 +608,8 @@
                 if (newdata.roomInitRes) {
                     newdata.roomInitRes = interceptPlayurl(newdata.roomInitRes);
                 }
-                this._init_data_neptune = newdata;
-                console.debug('[bililive-seeker] init data', newdata);
+                __init_data_neptune = newdata;
+                console.debug('[bililive-seeker] init data', __init_data_neptune);
             },
             configurable: true,
         });
@@ -613,112 +620,7 @@
 
     // ----------------------- 选项UI -----------------------
 
-    W.saveConfig = () => {
-        console.debug('[bililive-seeker] config changed');
-        Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=checkbox]')).forEach(e => {
-            setStoredValue(e.id, Boolean(e.checked));
-        });
-        Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=number]')).forEach(e => {
-            setStoredValue(e.id, Number(e.value));
-        });
-    }
-    W.copyPlayurl = () => {
-        const room_id = getRoomId();
-        if (!room_id) return;
-        const value = JSON.stringify(getStoredValue('playurl-' + room_id));
-        const e = document.querySelector('#copy-playurl');
-        if (!value) {
-            e.innerText = '无原画';
-        } else {
-            navigator.clipboard.writeText(value);
-            e.innerText = '已复制';
-        }
-        setTimeout(() => { e.innerText = '复制推流链接' }, 1000);
-    }
-    W.setPlayurl = () => {
-        const value = prompt("请输入playurl json字符串或带query string的完整flv网址\n如出错请取消勾选强制原画；留空点击确定清除当前直播间设置");
-        if (value === null) return;
-        const room_id = getRoomId();
-        if (value === "") {
-            deleteStoredValue('playurl-' + room_id);
-            expiredPlayurlChecker();
-        } else {
-            try {
-                let data;
-                if (value.match(/^(https:\/\/[^\/]+)(\/live-bvc\/\d+\/live_[^\/]+flv\?)(expires=\d+.*)/)) {
-                    const m = value.match(/^(https:\/\/[^\/]+)(\/live-bvc\/\d+\/live_[^\/]+flv\?)(expires=\d+.*)/);
-                    data = getPlayUrl(getRoomId());
-                    data.stream.forEach(i => {
-                        i.format.forEach(j => {
-                            j.codec.forEach(k => {
-                                k.base_url = m[2];
-                                k.url_info.forEach(u => {
-                                    u.extra = m[3];
-                                    u.host = m[1];
-                                })
-                                k.url_info = [k.url_info[0]];
-                            })
-                        })
-                    });
-                    console.debug('[bililive-seeker] parsed stream url to playurl', data);
-                } else {
-                    console.debug('[bililive-seeker] parsing playurl as json', value);
-                    data = JSON.parse(value);
-                }
-                if (data.cid !== room_id) {
-                    if (!confirm("json的房间号" + data.cid + "可能不符，是否依然为当前房间" + room_id + "设置？")) return
-                }
-                setStoredValue('playurl-' + room_id, data);
-                expiredPlayurlChecker();
-            } catch (e) {
-                alert('json字符串/flv链接解析失败\n' + e);
-                console.error(e);
-            }
-        }
-    }
-    W.setEndpoint = () => {
-        const url = getStoredValue('playurl-custom-endpoint') || "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo";
-        const value = prompt("请输入获取playurl所用的自定义API endpoint，用以替换默认的`https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo`\n如出错请留空点击确定恢复默认API", url);
-        if (value === null || value === url) return;
-        if (value === "") {
-            deleteStoredValue('playurl-custom-endpoint');
-        } else {
-            setStoredValue('playurl-custom-endpoint', value);
-        }
-    }
-    W.setSpeedUpThres = () => {
-        const storedThres = JSON.stringify(getStoredValue('speedup-thres'));
-        const value = prompt("请输入想要设定的追帧加速阈值\nJSON格式为[[缓冲长度阈值(秒), 播放速率],...]\n留空点击确定以恢复默认值", storedThres);
-        if (value === null || value === storedThres) return;
-        if (value === "") {
-            deleteStoredValue('speedup-thres');
-        } else {
-            try {
-                const newThres = JSON.parse(value);
-                setStoredValue('speedup-thres', newThres);
-            } catch (e) {
-                alert("设置失败\n" + e);
-                console.error(e);
-            }
-        }
-    }
-    W.setSlowdownThres = () => {
-        const storedThres = JSON.stringify(getStoredValue('speeddown-thres'));
-        const value = prompt("请输入想要设定的自动减速阈值\nJSON格式为[[缓冲长度阈值(秒), 播放速率],...]\n留空点击确定以恢复默认值", storedThres);
-        if (value === null || value === storedThres) return;
-        if (value === "") {
-            deleteStoredValue('speeddown-thres');
-        } else {
-            try {
-                const newThres = JSON.parse(value);
-                setStoredValue('speeddown-thres', newThres);
-            } catch (e) {
-                alert("设置失败\n" + e);
-                console.error(e);
-            }
-        }
-    }
-
+    /** @param {() => HTMLElement|null} checker * @param {(node: HTMLElement) => void} exec * @param {number} [timeout]*/
     const waitForElement = (checker, exec, timeout) => {
         const node = checker();
         if (node) {
@@ -733,32 +635,38 @@
         }
     }
 
-    const waitForQuery = (query, exec, timeout) => {
+    /** @param {string} query * @param {(node: HTMLElement) => void} exec * @param {number} timeout=10000 */
+    const waitForQuery = (query, exec, timeout = 10000) => {
         waitForElement(() => document.querySelector(query), exec, timeout)
     }
 
-    waitForQuery('#head-info-vm .lower-row', (node) => {
-        const e = document.createElement("span");
-        e.innerHTML = (
+    /** @param {string} query * @param {Document|HTMLElement} root * @returns {HTMLElement[]} */
+    const queryAllElements = (query, root = document) => {
+        return Array.prototype.slice.call(root.querySelectorAll(query))
+    }
+
+    waitForQuery('#head-info-vm .lower-row', node => {
+        const controlPanel = document.createElement("span");
+        controlPanel.innerHTML = (
             '<span id="basic-settings-page">' +
             '  <span title="重新从当前的位置开始播放直播来重置音视频的同步，以应对音视频的不同步  &#13;&#10;重置时会有一瞬的卡顿  &#13;&#10;勾选后自动每隔一段时间执行一次重置，重置间隔可以在高级选项中设置">' +
-            '<button id="reset-AV-sync" type="button" onclick="AVResync()" style="width:7em">重置音画同步</button><input type="checkbox" id="auto-AV-sync">' +
+            '<button id="reset-AV-sync" type="button" style="width:7em">重置音画同步</button><input type="checkbox" id="auto-AV-sync">' +
             '  </span><span title="隐藏播放器右键菜单中的“视频统计信息”悬浮窗  &#13;&#10;悬浮窗未开启时会自动取消勾选">' +
             '<label for="hide-stats">隐藏统计</label><input type="checkbox" id="hide-stats">' +
             '  </span><span title="当检测到播放器暂停，且缓冲长度超过“追帧秒数”时，自动恢复播放器播放">' +
-            '<label for="prevent-pause">避免暂停</label><input type="checkbox" id="prevent-pause" onchange="saveConfig()">' +
+            '<label for="prevent-pause">避免暂停</label><input type="checkbox" id="prevent-pause">' +
             '  </span><span title="直播状态下，检测到错误时自动刷新页面  &#13;&#10;或在下播状态下，弹幕服务器疑似断连时，自动刷新页面  &#13;&#10;刷新页面前文字会变为橙色">' +
-            '<label for="auto-reload">自动刷新</label><input type="checkbox" id="auto-reload" onchange="saveConfig()">' +
+            '<label for="auto-reload">自动刷新</label><input type="checkbox" id="auto-reload">' +
             '  </span>' +
             '<br>' +
             '  <span title="尝试去除视频流中的HEVC(“PRO”画质)和HLS流，让播放器优先使用FLV协议的AVC流，以降低延迟">' +
-            '<label for="force-flv">强制avc+flv</label><input type="checkbox" id="force-flv" onchange="saveConfig()">' +
+            '<label for="force-flv">强制avc+flv</label><input type="checkbox" id="force-flv">' +
             '  </span><span title="当获取的直播视频流为延迟更高的二压视频时，尝试替换为保存的原画流，以降低延迟  &#13;&#10;当前直播间没有保存原画流/原画流已过期时，选择框为灰色  &#13;&#10;主播网络卡顿/重开推流后可能出现一直重复最后几秒的情况，需取消该选项后切换一次画质或刷新">' +
-            '<label for="force-raw">强制原画</label><input type="checkbox" id="force-raw" onchange="saveConfig()">' +
+            '<label for="force-raw">强制原画</label><input type="checkbox" id="force-raw" style="filter: grayscale(1) brightness(1.5)">' +
             '  </span><span title="进入直播间时自动切换右下角的“原画”画质。和手动切换效果相同">' +
-            '<label for="auto-quality">自动原画</label><input type="checkbox" id="auto-quality" onchange="saveConfig()">' +
+            '<label for="auto-quality">自动原画</label><input type="checkbox" id="auto-quality">' +
             '  </span><span title="阻止直播间进行轮播">' +
-            '<label for="block-roundplay">阻止轮播</label><input type="checkbox" id="block-roundplay" onchange="saveConfig()">' +
+            '<label for="block-roundplay">阻止轮播</label><input type="checkbox" id="block-roundplay">' +
             '  </span>' +
             '<br>' +
             '  <span title="跳转至非活动页面的常规直播间">' +
@@ -766,35 +674,35 @@
             '  </span>' +
             '<button id="go-to-adv-settings" type="button" style="width: 7em">转到高级选项</button>' +
             '  <span title="本地播放器追帧的目标缓冲长度，单位为秒（播放器缓冲的长度1：1等于播放器产生的延迟）  &#13;&#10;过小容易导致卡顿甚至丢失原画的连接  &#13;&#10;需根据自己的网络情况选择合适的值  &#13;&#10;可在高级选项中关闭追帧">' +
-            '<label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" onchange="saveConfig()" step="0.1" style="width: 3em;">' +
+            '<label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" step="0.1" style="width: 3em;">' +
             '  </span>' +
             '</span>' +
 
             '<span id="adv-settings-page" style="display:none">' +
             '  <span title="复制当前直播间保存的原画流链接到剪贴板，可用于“设置连接”">' +
-            '<button id="copy-playurl" type="button" style="width: 7em" onclick="copyPlayurl()">复制推流链接</button>' +
+            '<button id="copy-playurl" type="button" style="width: 7em">复制推流链接</button>' +
             '  </span><span title="手动设置当前直播间保存的原画流链接，用于“强制原画”选项让播放器加载延迟更低的原画流  &#13;&#10;错误的配置可能导致无法正常观看直播！">' +
-            '<button id="set-playurl" type="button" onclick="setPlayurl()">设置链接!</button>' +
+            '<button id="set-playurl" type="button">设置链接!</button>' +
             '  </span><span title="设置获取视频流链接的API，详见说明中的链接  &#13;&#10;使用后可能无法观看各种限定直播！  &#13;&#10;错误的配置可能导致无法正常观看直播！">' +
-            '<button id="set-endpoint" type="button" style="width: 8em" onclick="setEndpoint()">设置视频流API !</button>' +
+            '<button id="set-endpoint" type="button" style="width: 8em">设置视频流API !</button>' +
             '  </span>' +
             '<br>' +
             '  <span title="设置缓冲时长超过追帧秒数时，缓冲长度和追帧秒数的差值的各级阶梯阈值，以及各级阶梯要加快到的播放速度  &#13;&#10;错误的配置可能导致播放不正常！">' +
-            '<button id="set-speedup-thres" type="button" style="width: 7.5em" onclick="setSpeedUpThres()">设置加速阈值!</button>' +
+            '<button id="set-speedup-thres" type="button" style="width: 7.5em">设置加速阈值!</button>' +
             '  </span><span title="取消勾选后将不会在缓冲时长超过追帧秒数时自动加速追帧">' +
-            '<label for="auto-speedup">追帧加速</label><input type="checkbox" id="auto-speedup" onchange="saveConfig()">' +
+            '<label for="auto-speedup">追帧加速</label><input type="checkbox" id="auto-speedup" checked>' +
             '  </span>' +
             '  <span title="设置缓冲时长极低时，降低播放速度的各级阶梯的缓冲时长阈值，以及各级阶梯要降低到的播放速度  &#13;&#10;错误的配置可能导致播放不正常！">' +
-            '<button id="set-slowdown-thres" type="button" style="width: 7.5em" onclick="setSlowdownThres()">设置减速阈值!</button>' +
+            '<button id="set-slowdown-thres" type="button" style="width: 7.5em">设置减速阈值!</button>' +
             '  </span><span title="取消勾选后将不会在缓冲时长降低至减速阈值后自动降低播放速度">' +
-            '<label for="auto-slowdown">自动减速</label><input type="checkbox" id="auto-slowdown" onchange="saveConfig()">' +
+            '<label for="auto-slowdown">自动减速</label><input type="checkbox" id="auto-slowdown" checked>' +
             '  </span>' +
             '<br>' +
             '<button id="go-to-basic-settings" type="button" style="width: 7em">转到基础选项</button>' +
             '  <span title="重置音画同步时，重新开始位置相对现在的秒数  &#13;&#10;合适的值可以减轻重置时的卡顿感">' +
-            '<label for="AV-resync-step">音画同步重置步进</label><input type="number" id="AV-resync-step" onchange="saveConfig()" step="0.01" style="width: 3.5em;">' +
+            '<label for="AV-resync-step">音画同步重置步进</label><input type="number" id="AV-resync-step" step="0.01" style="width: 3.5em;">' +
             '  </span><span title="勾选“重置音画同步”后，自动进行音画同步重置的间隔时长，单位为秒">' +
-            '<label for="AV-resync-interval">间隔</label><input type="number" id="AV-resync-interval" onchange="saveConfig()" step="1" style="width: 3.5em;">' +
+            '<label for="AV-resync-interval">间隔</label><input type="number" id="AV-resync-interval" step="1" style="width: 3.5em;">' +
             '  </span>' +
             '</span>' +
 
@@ -804,94 +712,229 @@
             '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.6);} #seeker-control-panel input { vertical-align: middle; margin:1px; }' +
             '#seeker-control-panel label.danmaku-lost, #seeker-control-panel label.live-on, #seeker-control-panel label.video-error, #seeker-control-panel label.reload { color: orange!important; filter: none; }</style>'
         );
-        e.style = 'text-align: right; flex: 0 0 fit-content; margin-left: 5px; margin-top: -5px;';
-        e.id = 'seeker-control-panel';
-        node.appendChild(e);
+        controlPanel.style.cssText = 'text-align: right; flex: 0 0 fit-content; margin-left: 5px; margin-top: -5px;';
+        controlPanel.id = 'seeker-control-panel';
+        node.appendChild(controlPanel);
 
-        const updateInfoPanelStyle = (node) => {
-            const infoPanel = document.querySelector('.web-player-video-info-panel');
-            if (!infoPanel) {
-                node.checked = false;
-                return;
-            }
-            if (node.checked) {
-                if (infoPanel.style.display === 'none') {
-                    infoPanel.style.opacity = '';
+        queryAllElements('label, button, a', controlPanel).forEach(node => {
+            node.classList.add('live-skin-normal-a-text');
+        })
+
+        /** @param {HTMLElement} node * @param {(event: MouseEvent & {target: HTMLElement}) => void} callback */
+        const setOnclick = (node, callback) => {
+            node.onclick = callback;
+        }
+
+        /** @param {HTMLElement} node * @param {(event: Event & {target: HTMLInputElement}) => void} callback */
+        const setOnchange = (node, callback) => {
+            node.onchange = callback;
+        }
+
+        /** @type {{ [key: string]: (event: MouseEvent & {target: HTMLElement}) => void}} */
+        const clickCallbacks = {
+            'copy-playurl': event => {
+                const room_id = getRoomId();
+                if (!room_id) return;
+                const value = JSON.stringify(getStoredValue('playurl-' + room_id));
+                if (!value) {
+                    event.target.innerText = '无原画';
+                } else {
+                    navigator.clipboard.writeText(value);
+                    event.target.innerText = '已复制';
+                }
+                setTimeout(() => { event.target.innerText = '复制推流链接' }, 1000);
+            },
+            'set-playurl': event => {
+                const value = prompt("请输入playurl json字符串或带query string的完整flv网址\n如出错请取消勾选强制原画；留空点击确定清除当前直播间设置");
+                if (value === null) return;
+                const room_id = getRoomId();
+                if (value === "") {
+                    deleteStoredValue('playurl-' + room_id);
+                    expiredPlayurlChecker();
+                } else {
+                    try {
+                        let data;
+                        if (value.match(/^(https:\/\/[^\/]+)(\/live-bvc\/\d+\/live_[^\/]+flv\?)(expires=\d+.*)/)) {
+                            const m = value.match(/^(https:\/\/[^\/]+)(\/live-bvc\/\d+\/live_[^\/]+flv\?)(expires=\d+.*)/);
+                            data = getPlayUrl(getRoomId());
+                            data.stream.forEach(i => {
+                                i.format.forEach(j => {
+                                    j.codec.forEach(k => {
+                                        k.base_url = m[2];
+                                        k.url_info.forEach(u => {
+                                            u.extra = m[3];
+                                            u.host = m[1];
+                                        })
+                                        k.url_info = [k.url_info[0]];
+                                    })
+                                })
+                            });
+                            console.debug('[bililive-seeker] parsed stream url to playurl', data);
+                        } else {
+                            console.debug('[bililive-seeker] parsing playurl as json', value);
+                            data = JSON.parse(value);
+                        }
+                        if (data.cid !== room_id) {
+                            if (!confirm("json的房间号" + data.cid + "可能不符，是否依然为当前房间" + room_id + "设置？")) return
+                        }
+                        setStoredValue('playurl-' + room_id, data);
+                        expiredPlayurlChecker();
+                    } catch (e) {
+                        alert('json字符串/flv链接解析失败\n' + e);
+                        console.error(e);
+                    }
+                }
+            },
+            'set-endpoint': event => {
+                const url = getStoredValue('playurl-custom-endpoint') || "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo";
+                const value = prompt("请输入获取playurl所用的自定义API endpoint，用以替换默认的`https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo`\n如出错请留空点击确定恢复默认API", url);
+                if (value === null || value === url) return;
+                if (value === "") {
+                    deleteStoredValue('playurl-custom-endpoint');
+                } else {
+                    setStoredValue('playurl-custom-endpoint', value);
+                }
+            },
+            'set-speedup-thres': event => {
+                const storedThres = JSON.stringify(getStoredValue('speedup-thres'));
+                const value = prompt("请输入想要设定的追帧加速阈值\nJSON格式为[[缓冲长度阈值(秒), 播放速率],...]\n留空点击确定以恢复默认值", storedThres);
+                if (value === null || value === storedThres) return;
+                if (value === "") {
+                    deleteStoredValue('speedup-thres');
+                } else {
+                    try {
+                        const newThres = JSON.parse(value);
+                        setStoredValue('speedup-thres', newThres);
+                    } catch (e) {
+                        alert("设置失败\n" + e);
+                        console.error(e);
+                    }
+                }
+            },
+            'set-slowdown-thres': event => {
+                const storedThres = JSON.stringify(getStoredValue('speeddown-thres'));
+                const value = prompt("请输入想要设定的自动减速阈值\nJSON格式为[[缓冲长度阈值(秒), 播放速率],...]\n留空点击确定以恢复默认值", storedThres);
+                if (value === null || value === storedThres) return;
+                if (value === "") {
+                    deleteStoredValue('speeddown-thres');
+                } else {
+                    try {
+                        const newThres = JSON.parse(value);
+                        setStoredValue('speeddown-thres', newThres);
+                    } catch (e) {
+                        alert("设置失败\n" + e);
+                        console.error(e);
+                    }
+                }
+            },
+        }
+
+        /** @type {{ [key: string]: (node: HTMLInputElement) => void}} */
+        const checkboxCallbacks = {
+            'hide-stats': node => {
+                /** @type {HTMLElement|null} */
+                const infoPanel = document.querySelector('.web-player-video-info-panel');
+                if (!infoPanel) {
                     node.checked = false;
                     return;
-                } else {
-                    Array.prototype.filter.call(infoPanel.querySelectorAll('div'), i => i.innerText === '[x]').forEach(i => { i.style.display = 'none'; });
-                    infoPanel.style.opacity = '0';
-                    infoPanel.style.userSelect = 'none';
                 }
-            } else {
-                infoPanel.style.userSelect = 'text';
-                infoPanel.style.opacity = '';
-                Array.prototype.filter.call(infoPanel.querySelectorAll('div'), i => i.innerText === '[x]').forEach(i => { i.style.display = ''; });
-            }
-        }
-        const updateThresInputStyle = (node) => {
-            if (!node.checked) {
-                document.querySelector('label[for="buffer-threshold"]').style.textDecoration = 'line-through black solid 2px';
-                document.querySelector('#buffer-threshold').style.background = '#feee';
-            } else {
-                document.querySelector('label[for="buffer-threshold"]').style.textDecoration = '';
-                document.querySelector('#buffer-threshold').style.background = '';
-            }
+                if (node.checked) {
+                    if (infoPanel.style.display === 'none') {
+                        infoPanel.style.opacity = '';
+                        node.checked = false;
+                        return;
+                    } else {
+                        queryAllElements('div', infoPanel).filter(i => i.innerText === '[x]').forEach(i => { i.style.display = 'none'; });
+                        infoPanel.style.opacity = '0';
+                        infoPanel.style.userSelect = 'none';
+                    }
+                } else {
+                    infoPanel.style.userSelect = 'text';
+                    infoPanel.style.opacity = '';
+                    queryAllElements('div', infoPanel).filter(i => i.innerText === '[x]').forEach(i => { i.style.display = ''; });
+                }
+            },
+            'auto-AV-sync': node => {
+                if (node.checked) {
+                    startAutoResync();
+                } else {
+                    stopAutoResync();
+                }
+            },
+            'auto-speedup': node => {
+                if (!node.checked) {
+                    controlPanel.querySelector('label[for="buffer-threshold"]').style.textDecoration = 'line-through black solid 2px';
+                    controlPanel.querySelector('#buffer-threshold').style.background = '#feee';
+                } else {
+                    controlPanel.querySelector('label[for="buffer-threshold"]').style.textDecoration = '';
+                    controlPanel.querySelector('#buffer-threshold').style.background = '';
+                }
+            },
         }
 
-        document.querySelector('#hide-stats').onchange = (e) => {
-            W.saveConfig();
-            updateInfoPanelStyle(e.target);
+        const saveConfig = () => {
+            console.debug('[bililive-seeker] config changed');
+            queryAllElements('input[type=checkbox]', controlPanel).forEach(e => {
+                setStoredValue(e.id, Boolean(e.checked));
+            });
+            queryAllElements('input[type=number]', controlPanel).forEach(e => {
+                setStoredValue(e.id, Number(e.value));
+            });
         }
+
+        queryAllElements('button', controlPanel).forEach(node => {
+            if (clickCallbacks[node.id]) {
+                setOnclick(node, clickCallbacks[node.id]);
+            } else if (node.id === 'go-to-adv-settings') {
+                setOnclick(node, event => {
+                    document.querySelector('#basic-settings-page').style.display = "none";
+                    document.querySelector('#adv-settings-page').style.display = "";
+                });
+            } else if (node.id === 'go-to-basic-settings') {
+                setOnclick(node, event => {
+                    document.querySelector('#basic-settings-page').style.display = "";
+                    document.querySelector('#adv-settings-page').style.display = "none";
+                });
+            } else if (node.id === 'reset-AV-sync') {
+                setOnclick(node, event => { AVResync(); });
+            } else {
+                console.error('[bililive-seeker] No behavior bound to button ' + node.id);
+            }
+        })
+
+        queryAllElements('input[type=checkbox]', controlPanel).forEach(_node => {
+            const node = /** @type {HTMLInputElement} */ (_node);
+            node.checked = getStoredValue(node.id);
+            if (typeof defaultValues[node.id] != 'boolean') console.warn('[bililive-seeker] Missing default for checkbox ' + node.id);
+            if (checkboxCallbacks[node.id]) {
+                setOnchange(node, event => { saveConfig(); checkboxCallbacks[node.id](event.target); });
+                setTimeout(() => { checkboxCallbacks[node.id](node); }, 100);
+            } else {
+                setOnchange(node, event => { saveConfig(); });
+            }
+        })
+
+        queryAllElements('input[type=number]', controlPanel).forEach(_node => {
+            const node = /** @type {HTMLInputElement} */ (_node);
+            node.value = getStoredValue(node.id);
+            if (typeof defaultValues[node.id] != 'number') console.warn('[bililive-seeker] Missing default value for input ' + node.id);
+            if (node.id === 'AV-resync-interval') {
+                setOnchange(node, event => { saveConfig(); if (getValue('auto-AV-sync', true)) startAutoResync(); })
+            } else {
+                setOnchange(node, event => { saveConfig(); })
+            }
+        })
 
         if (W.self !== W.top) {
-            document.querySelector('#go-to-blanc-room').style.display = "inline-block";
-            document.querySelector('#go-to-blanc-room').href = location.href;
+            waitForQuery('a#go-to-blanc-room', _node => {
+                const node = /** @type {HTMLAnchorElement} */ (_node);
+                node.style.display = "inline-block";
+                node.href = location.href;
+            });
         }
 
-        document.querySelector('#go-to-adv-settings').onclick = (e) => {
-            document.querySelector('#basic-settings-page').style.display = "none";
-            document.querySelector('#adv-settings-page').style.display = "";
-        }
-
-        document.querySelector('#go-to-basic-settings').onclick = (e) => {
-            document.querySelector('#basic-settings-page').style.display = "";
-            document.querySelector('#adv-settings-page').style.display = "none";
-        }
-
-        document.querySelector('#auto-AV-sync').onchange = (e) => {
-            W.saveConfig();
-            if (e.target.checked) {
-                startAutoResync();
-            } else {
-                stopAutoResync();
-            }
-        }
-        document.querySelector('#AV-resync-interval').onchange = (e) => {
-            W.saveConfig();
-            if (getValue('auto-AV-sync', true)) startAutoResync();
-        }
-
-        document.querySelector('#auto-speedup').onchange = (e) => {
-            W.saveConfig();
-            updateThresInputStyle(e.target);
-        }
-
-        Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel label, #seeker-control-panel button, #seeker-control-panel a')).forEach(e => {
-            e.className += ' live-skin-normal-a-text';
-        })
-
-        Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=checkbox]')).forEach(e => {
-            if (e.id === "hide-stats" || e.id === 'auto-AV-sync') return (getStoredValue(e.id) && setTimeout(() => { e.click() }, 100));
-            e.checked = getStoredValue(e.id);
-            if (e.id === 'auto-speedup') updateThresInputStyle(e);
-        })
-        Array.prototype.slice.call(document.querySelectorAll('#seeker-control-panel input[type=number]')).forEach(e => {
-            e.value = getStoredValue(e.id);
-        })
         expiredPlayurlChecker();
-    })
+    }, 30000);
 
     waitForQuery('#head-info-vm .lower-row .right-ctnr', node => {
         const getBottom = (e) => { const rect = e.getBoundingClientRect(); return rect.y + rect.height; }
@@ -912,6 +955,9 @@
         });
         observer.observe(node);
     });
+
+    // ----------------------- 显示折叠UI -----------------------
+
 
     const updatePanelHideState = () => {
         if (getStoredValue('hide-seeker-control-panel')) {
