@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.7.2
+// @version      0.7.3
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -18,8 +18,6 @@
 // ==/UserScript==
 
 // @ts-check
-
-// JSDoc type annotation for development environment: https://github.com/silverwzw/Tampermonkey-Typescript-Declaration
 ///<reference path="./Tampermonkey-Typescript-Declaration/tampermonkey-reference.d.ts" />
 
 (function () {
@@ -51,7 +49,13 @@
                 try {
                     const value = typeName === 'string' ? localStorage.getItem(key) : JSON.parse(localStorage.getItem(key));
                     console.log('migrate', key, value);
-                    if (typeof value === typeName) GM_setValue(key, value);
+                    if (typeof value === typeName) {
+                        if (key === 'playurl-custom-endpoint') {
+                            GM_setValue('playinfo-custom-endpoint', value);
+                        } else {
+                            GM_setValue(key, value);
+                        }
+                    }
                 } catch (e) {
                     console.error('[bililive-seeker] Failed to migrate setting for ' + key + '\n', e);
                 }
@@ -110,6 +114,7 @@
     const deleteStoredValue = (key) => {
         GM_deleteValue(key);
     };
+    /** @returns {string[]} */
     const listStoredKeys = () => {
         return GM_listValues();
     };
@@ -117,31 +122,50 @@
         listStoredKeys().forEach(key => { deleteStoredValue(key) });
         // setStoredValue('version', 1);
     }
+    W.clearSeekerConfig = clearStoredValues;
 
-    /** @param {string} key * @param {boolean} fallback * @returns {(boolean|null)} */
+    /** @template T * @param {string} key * @param {(value: any) => T} filterFunc * @returns {T} */
+    const getStoredValueWithFilter = (key, filterFunc) => {
+        let value = filterFunc(getStoredValue(key));
+        if (value === null) value = filterFunc(defaultValues[key]);
+        return value;
+    }
+
+    /** @param {any} value * @returns {boolean|null} */
+    const booleanOrNull = value => (typeof value === 'boolean')? value : null;
+    /** @param {any} value * @returns {number|null} */
+    const numberOrNull = value => (value !== null && !Number.isNaN(Number(value)))? Number(value) : null;
+    /** @param {any} value * @returns {string|null} */
+    const stringOrNull = value => (typeof value === 'string')? value : null;
+
+    /** @param {string} key * @returns {boolean|null} */
+    const getStoredBoolean = key => getStoredValueWithFilter(key, booleanOrNull);
+    /** @param {string} key * @returns {number|null} */
+    const getStoredNumber = key => getStoredValueWithFilter(key, numberOrNull);
+    /** @param {string} key * @returns {string|null} */
+    const getStoredString = key => getStoredValueWithFilter(key, stringOrNull);
+
+
+    /** @param {string} key * @param {boolean} [fallback] * @returns {boolean|null} */
     const isChecked = (key, fallback) => {
         /** @type {null | Element & { checked: any }} */
         const e = document.querySelector('#' + key);
-        if (e && (typeof e?.checked === 'boolean')) return e.checked;
-        if (fallback) {
-            const value = getStoredValue(key);
-            return (typeof value === 'boolean')? value : defaultValues[key];
-        }
-        return null;
-    };
-    /** @param {string} key * @param {boolean} fallback * @returns {(number|null)} */
-    const getValue = (key, fallback) => {
+        let value = booleanOrNull(e?.checked);
+        if (value === null && fallback) value = getStoredBoolean(key);
+        return value;
+    }
+
+    /** @param {string} key * @param {boolean} fallback * @returns {number|null} */
+    const getNumValue = (key, fallback) => {
         /** @type {null | Element & { value: any }} */
         const e = document.querySelector('#' + key);
-        let value = Number(e?.value);
-        if (!Number.isNaN(value)) return value;
-        if (fallback) {
-            value = Number(getStoredValue(key));
-            return (!Number.isNaN(value))? value : defaultValues[key];
-        }
-        return null;
+        let value = numberOrNull(e?.value);
+        if (value === null && fallback) value = getStoredNumber(key);
+        return value;
     };
+
     let room_init_res_cache;
+    /** @returns {number|null} */
     const getRoomId = () => {
         const _getRoomId = () => {
             const room_id = Number(W.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id || room_init_res_cache?.data?.room_id);
@@ -163,7 +187,7 @@
     const getVideoElement = () => {
         return document.getElementsByTagName('video')[0];
     };
-    /** @param {HTMLVideoElement|undefined|null} v */
+    /** @param {HTMLVideoElement|undefined|null} v * @returns {boolean|undefined} */
     const isLiveStream = (v) => {
         if (document.querySelector('.web-player-round-title')?.innerText) return false; // 轮播
         if (document.querySelector('.web-player-ending-panel')?.innerText) return false; // 闲置或轮播阻断
@@ -171,6 +195,7 @@
         if (!e) return undefined; // 网页加载
         return true; // 直播
     };
+    /** @returns {HTMLVideoElement|null} */
     const getLiveVideoElement = () => {
         const v = getVideoElement();
         if (v && isLiveStream(v)) return v;
@@ -214,7 +239,7 @@
         setRate(v, 1.0);
     }
 
-    /** @param {HTMLVideoElement} v */
+    /** @param {HTMLVideoElement} v * @returns {number|null} */
     const getBufferlen = (v) => {
         try {
             const buffer_len = Number(v.buffered.end(0) - v.currentTime);
@@ -227,7 +252,7 @@
 
     const adjustSpeedup = () => {
         try {
-            const thres = getValue('buffer-threshold', false);
+            const thres = getNumValue('buffer-threshold', false);
             const v = getLiveVideoElement();
             if (!thres || !v) return;
 
@@ -290,7 +315,7 @@
     const AVResync = () => {
         console.debug("[bililive-seeker] enforce AV sync")
         const v = getLiveVideoElement();
-        const step = getValue('AV-resync-step', true);
+        const step = getNumValue('AV-resync-step', true);
         if (!v || step === null) return;
         v.currentTime = v.currentTime + step;
     }
@@ -301,7 +326,7 @@
     const startAutoResync = () => {
         stopAutoResync();
         console.debug("[bililive-seeker] start AV sync interval")
-        avResyncIntervalId = setInterval(() => { AVResync() }, getValue("AV-resync-interval", true) * 1000);
+        avResyncIntervalId = setInterval(() => { AVResync() }, Math.max(1, getNumValue("AV-resync-interval", true) || 0) * 1000);
     }
 
 
@@ -311,7 +336,7 @@
         if (!isChecked('prevent-pause', false)) return
         const v = getLiveVideoElement();
         if (v && v.paused) {
-            const thres = getValue('buffer-threshold', false);
+            const thres = getNumValue('buffer-threshold', false);
             const bufferLen = getBufferlen(v);
             if (typeof thres === 'number' && typeof bufferLen === 'number' && thres > bufferLen) return;
             v.play();
@@ -320,12 +345,12 @@
     const checkPausedIntervalId = setInterval(() => { checkPaused() }, 500)
 
     /** @param {Object} options * @param {number} [options.timeout] * @param {string} [options.lastChat] */
-    const offLiveAutoReload = ({ timeout, lastChat }) => {
+    const offliveDanmakuLostReload = ({ timeout, lastChat }) => {
         if (!isChecked('auto-reload', false)) return;
-        if (isLiveStream(null) === false && isChecked('block-roundplay', false) && getStoredValue('block-roundplay')) {
+        if (isLiveStream(null) === false && isChecked('block-roundplay', false) && getStoredBoolean('block-roundplay')) {
             const chatHistory = document.querySelector('.chat-history-panel')?.innerText;
             if (timeout) {
-                setTimeout(() => { offLiveAutoReload({ lastChat: chatHistory }) }, timeout)
+                setTimeout(() => { offliveDanmakuLostReload({ lastChat: chatHistory }) }, timeout)
             } else {
                 if (chatHistory === lastChat) {
                     setTimeout(() => { W.location.reload(); }, 5000);
@@ -377,7 +402,7 @@
         }
         document.querySelector('label[for="auto-reload"]').classList.remove('video-error');
     }
-    const offLiveReloadIntervalId = setInterval(() => { offLiveAutoReload({ timeout: 3600 * 1000 }) }, 600 * 1000);
+    const offLiveDanmakuReloadIntervalId = setInterval(() => { offliveDanmakuLostReload({ timeout: 3600 * 1000 }) }, 600 * 1000);
     const checkLiveReloadIntervalId = setInterval(() => { checkIsLiveReload(10 * 1000) }, 120 * 1000);
     const checkErrorReloadIntervalId = setInterval(() => { checkErrorReload(3000) }, 2000);
 
@@ -456,10 +481,16 @@
         });
         setTimeout(() => {
             const room_id = getRoomId();
-            if (!getStoredValue('playurl-' + room_id)) {
-                document.querySelector('#force-raw').style = 'filter: grayscale(1) brightness(1.5)';
+            /** @type {HTMLElement|null} */
+            const e = document.querySelector('#force-raw');
+            if (e) {
+                if (!getStoredValue('playurl-' + room_id)) {
+                    e.style.cssText = 'filter: grayscale(1) brightness(1.5)';
+                } else {
+                    e.style.cssText = '';
+                }
             } else {
-                document.querySelector('#force-raw').style = '';
+                console.debug('[bililive-seeker] Failed to find force-raw element to update')
             }
         }, 200);
     }
@@ -478,7 +509,7 @@
         return r;
     }
 
-    /** @param {string} url */
+    /** @param {string} url * @returns {string} */
     const replaceRoomplayReqUrl = (url) => {
         if (isChecked('auto-quality', true)) {
             url = url.replace(/qn=0\b/, 'qn=10000');
@@ -487,9 +518,10 @@
             url = url.replace(/protocol=0,[^&]+/, 'protocol=0');
             url = url.replace(/codec=0,[^&]+/, 'codec=0');
         }
-        if (getStoredValue('playurl-custom-endpoint')) {
+        const endpoint = getStoredString('playinfo-custom-endpoint');
+        if (endpoint) {
             url = url.replace(/^\/\//, 'https://');
-            url = url.replace('https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo', getStoredValue('playurl-custom-endpoint'));
+            url = url.replace('https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo', endpoint);
             console.debug('[bililive-seeker] replacing API endpoint', url);
         }
         return url;
@@ -505,7 +537,8 @@
                 if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
                     url = replaceRoomplayReqUrl(url);
                     arguments[0] = (resource instanceof Request)? new Request(url, resource) : url;
-                    console.debug('[bililive-seeker] fetch request', arguments);
+                    // since this should only be GET request
+                    console.debug('[bililive-seeker] modified roomPlayInfo fetch request', arguments);
                     const response = await origFetch.apply(this, arguments);
                     const r = interceptPlayurl(await response.clone().json());
                     return new Response(JSON.stringify(r), response);
@@ -527,7 +560,7 @@
             hookFetch();
             for (let i = 0; i < 50; i++) {
                 await W.fetch('//_test_hook_alive_dummy_url/').catch(e => { hookFetch(); });
-                await new Promise(r => setTimeout(r, 100));
+                await new Promise(r => setTimeout(r, 100));  //async sleep 100ms
             }
         } catch (e) {
             console.error('[bililive-seeker] error while hooking `window.fetch`\n', e);
@@ -560,7 +593,7 @@
         Object.defineProperty(XMLHttpRequest.prototype, 'responseText', {
             get: function () {
                 try {
-                    if (this.responseURL.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo') || this.responseURL.match(getStoredValue('playurl-custom-endpoint') || null)) {
+                    if (this.responseURL.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo') || this.responseURL.match(getStoredString('playinfo-custom-endpoint'))) {
                         const rsp = JSON.parse(xhrAccessor.get.call(this));
                         cacheRoomInit(rsp);
                         return JSON.stringify(interceptPlayurl(rsp));
@@ -586,14 +619,14 @@
             set: function (newdata) {
                 if (newdata.roomInitRes?.data?.playurl_info?.playurl?.stream) {
                     let playurl = newdata.roomInitRes.data.playurl_info.playurl;
-                    if (getStoredValue('auto-quality')) {
+                    if (getStoredBoolean('auto-quality')) {
                         console.debug('[bililive-seeker] getting original quality');
                         if (playurl.stream[0].format[0].codec[0].current_qn < 10000) {
                             playurl = getPlayUrl(newdata.roomInitRes.data.room_id) || playurl;
                             newdata.roomInitRes.data.playurl_info.playurl = playurl;
                         }
                     }
-                    if (getStoredValue('force-flv')) {
+                    if (getStoredBoolean('force-flv')) {
                         console.debug('[bililive-seeker] filter video formats');
                         const filteredStream = playurl.stream.filter(i => i.protocol_name !== "http_hls");
                         if (filteredStream.length) playurl.stream = filteredStream;
@@ -620,7 +653,7 @@
 
     // ----------------------- 选项UI -----------------------
 
-    /** @param {() => HTMLElement|null} checker * @param {(node: HTMLElement) => void} exec * @param {number} [timeout]*/
+    /** @param {() => HTMLElement|null} checker * @param {(node: HTMLElement) => void} exec * @param {number} [timeout] */
     const waitForElement = (checker, exec, timeout) => {
         const node = checker();
         if (node) {
@@ -702,7 +735,7 @@
             '  <span title="重置音画同步时，重新开始位置相对现在的秒数  &#13;&#10;合适的值可以减轻重置时的卡顿感">' +
             '<label for="AV-resync-step">音画同步重置步进</label><input type="number" id="AV-resync-step" step="0.01" style="width: 3.5em;">' +
             '  </span><span title="勾选“重置音画同步”后，自动进行音画同步重置的间隔时长，单位为秒">' +
-            '<label for="AV-resync-interval">间隔</label><input type="number" id="AV-resync-interval" step="1" style="width: 3.5em;">' +
+            '<label for="AV-resync-interval">间隔</label><input type="number" id="AV-resync-interval" step="1" min="1" style="width: 3.5em;">' +
             '  </span>' +
             '</span>' +
 
@@ -786,13 +819,13 @@
                 }
             },
             'set-endpoint': event => {
-                const url = getStoredValue('playurl-custom-endpoint') || "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo";
+                const url = getStoredString('playinfo-custom-endpoint') || "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo";
                 const value = prompt("请输入获取playurl所用的自定义API endpoint，用以替换默认的`https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo`\n如出错请留空点击确定恢复默认API", url);
                 if (value === null || value === url) return;
                 if (value === "") {
-                    deleteStoredValue('playurl-custom-endpoint');
+                    deleteStoredValue('playinfo-custom-endpoint');
                 } else {
-                    setStoredValue('playurl-custom-endpoint', value);
+                    setStoredValue('playinfo-custom-endpoint', value);
                 }
             },
             'set-speedup-thres': event => {
@@ -904,7 +937,8 @@
 
         queryAllElements('input[type=checkbox]', controlPanel).forEach(_node => {
             const node = /** @type {HTMLInputElement} */ (_node);
-            node.checked = getStoredValue(node.id);
+            const storedChecked = getStoredBoolean(node.id);
+            if (storedChecked !== null) node.checked = storedChecked;
             if (typeof defaultValues[node.id] != 'boolean') console.warn('[bililive-seeker] Missing default for checkbox ' + node.id);
             if (checkboxCallbacks[node.id]) {
                 setOnchange(node, event => { saveConfig(); checkboxCallbacks[node.id](event.target); });
@@ -916,10 +950,11 @@
 
         queryAllElements('input[type=number]', controlPanel).forEach(_node => {
             const node = /** @type {HTMLInputElement} */ (_node);
-            node.value = getStoredValue(node.id);
+            const storedNumer = getStoredNumber(node.id);
+            if (storedNumer !== null) node.value = storedNumer.toString();
             if (typeof defaultValues[node.id] != 'number') console.warn('[bililive-seeker] Missing default value for input ' + node.id);
             if (node.id === 'AV-resync-interval') {
-                setOnchange(node, event => { saveConfig(); if (getValue('auto-AV-sync', true)) startAutoResync(); })
+                setOnchange(node, event => { saveConfig(); if (isChecked('auto-AV-sync', true)) startAutoResync(); })
             } else {
                 setOnchange(node, event => { saveConfig(); })
             }
@@ -960,7 +995,7 @@
 
 
     const updatePanelHideState = () => {
-        if (getStoredValue('hide-seeker-control-panel')) {
+        if (getStoredBoolean('hide-seeker-control-panel')) {
             waitForQuery('#seeker-control-panel', node => { node.style.display = 'none'; });
             waitForQuery('#control-panel-showhide span', node => { node.innerText = '显示追帧'; });
             waitForQuery('#head-info-vm .upper-row .right-ctnr', node => { node.style.marginTop = ''; });
@@ -989,7 +1024,7 @@
         e.className = "icon-ctnr live-skin-normal-a-text pointer";
         e.innerHTML = '<i class="v-middle icon-font icon-danmu-a" style="margin-left:16px; font-size:16px;"></i><span class="action-text v-middle" style="margin-left:8px; font-size:12px;"></span>';
         e.onclick = () => {
-            setStoredValue('hide-seeker-control-panel', !getStoredValue('hide-seeker-control-panel'));
+            setStoredValue('hide-seeker-control-panel', !getStoredBoolean('hide-seeker-control-panel'));
             updatePanelHideState();
         }
         node.appendChild(e);
