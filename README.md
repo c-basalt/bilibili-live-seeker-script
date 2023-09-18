@@ -16,6 +16,8 @@ https://greasyfork.org/zh-CN/scripts/453967
 
 ## 次要功能
 
+- 0.7.4
+	- 添加清空重置所有配置项的按钮
 - 0.6.18
 	- 添加追帧加速阈值的设置选项（[#2](https://github.com/c-basalt/bilibili-live-seeker-script/pull/2) by [TianQiBuTian](https://github.com/TianQiBuTian)）
 - 0.6.16
@@ -62,6 +64,7 @@ https://greasyfork.org/zh-CN/scripts/453967
 
 ### 高级选项
 
+- 清空配置：清空重置追帧脚本的所有配置（包括缓存的原画链接）并立刻刷新页面
 - 复制推流链接：复制当前直播间保存的原画流链接到剪贴板，可用于“设置连接”。
 - 设置连接：手动设置当前直播间保存的原画流链接，用于“强制原画”选项让播放器加载延迟更低的原画流。错误的配置可能导致无法正常观看直播！
 - 设置视频流API：设置获取视频流链接的API，详见[#1](https://github.com/c-basalt/bilibili-live-seeker-script/issues/1)。使用后可能无法观看各种限定直播！错误的配置可能导致无法正常观看直播！

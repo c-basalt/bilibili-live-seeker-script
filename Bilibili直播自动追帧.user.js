@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.7.3
+// @version      0.7.4
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -122,7 +122,6 @@
         listStoredKeys().forEach(key => { deleteStoredValue(key) });
         // setStoredValue('version', 1);
     }
-    W.clearSeekerConfig = clearStoredValues;
 
     /** @template T * @param {string} key * @param {(value: any) => T} filterFunc * @returns {T} */
     const getStoredValueWithFilter = (key, filterFunc) => {
@@ -218,7 +217,7 @@
         if (!titleRate) {
             const e2 = document.querySelector('.live-title .text');
             if (e2) {
-                e2.innerHTML = e2.innerHTML.match(/^([^<]+)(<|$)/)[1] + '<br><span id="playback-rate-title" style="display:none">@' + playback_rate + '</span>'
+                e2.innerHTML = e2.innerHTML.match(/^([^<]+)(<|$)/)[1] + '<br><span id="playback-rate-title" style="position: absolute; display:none">@' + playback_rate + '</span>'
             }
         } else {
             titleRate.innerText = '@' + playback_rate;
@@ -560,7 +559,7 @@
             hookFetch();
             for (let i = 0; i < 50; i++) {
                 await W.fetch('//_test_hook_alive_dummy_url/').catch(e => { hookFetch(); });
-                await new Promise(r => setTimeout(r, 100));  //async sleep 100ms
+                await new Promise(r => setTimeout(r, 100)); //async sleep 100ms
             }
         } catch (e) {
             console.error('[bililive-seeker] error while hooking `window.fetch`\n', e);
@@ -678,6 +677,28 @@
         return Array.prototype.slice.call(root.querySelectorAll(query))
     }
 
+    waitForQuery('#head-info-vm', node => {
+        setTimeout(() => {
+            if (document.querySelector('#head-info-vm .lower-row')) {
+                console.debug('[bililive-seeker] Page is loaded, will not add reset button');
+                return;
+            }
+            console.debug('[bililive-seeker] Adding reset button');
+            const resetButtonWrapper = document.createElement('span');
+            resetButtonWrapper.innerHTML = (
+                '<button id="reset-seeker-configs-fallback">重置追帧脚本配置</button>' +
+                '<style>#reset-seeker-configs-fallback {background: transparent; border: 1.5px solid #999; border-radius: 4px}' +
+                '#reset-seeker-configs-fallback:active { transform: translate(1px, 1px); }</style>');
+            resetButtonWrapper.style.cssText = 'position: absolute; right: 25px; top: 15px';
+            resetButtonWrapper.children[0].onclick = _ => { clearStoredValues(); location.reload() };
+            node.appendChild(resetButtonWrapper);
+            waitForQuery('#head-info-vm .lower-row', _ => {
+                console.log('[bililive-seeker] Removing reset button');
+                document.querySelector('#reset-seeker-configs-fallback').parentElement.remove();
+            });
+        }, 3000);
+    });
+
     waitForQuery('#head-info-vm .lower-row', node => {
         const controlPanel = document.createElement("span");
         controlPanel.innerHTML = (
@@ -712,7 +733,9 @@
             '</span>' +
 
             '<span id="adv-settings-page" style="display:none">' +
-            '  <span title="复制当前直播间保存的原画流链接到剪贴板，可用于“设置连接”">' +
+            '  <span title="清空重置追帧脚本的所有配置（包括缓存的原画链接）并立刻刷新页面">' +
+            '<button id="reset-seeker-configs" style="width: 5em">重置配置</button>' +
+            '  </span><span title="复制当前直播间保存的原画流链接到剪贴板，可用于“设置连接”">' +
             '<button id="copy-playurl" type="button" style="width: 7em">复制推流链接</button>' +
             '  </span><span title="手动设置当前直播间保存的原画流链接，用于“强制原画”选项让播放器加载延迟更低的原画流  &#13;&#10;错误的配置可能导致无法正常观看直播！">' +
             '<button id="set-playurl" type="button">设置链接!</button>' +
@@ -765,6 +788,16 @@
 
         /** @type {{ [key: string]: (event: MouseEvent & {target: HTMLElement}) => void}} */
         const clickCallbacks = {
+            'reset-seeker-configs': event => {
+                if (confirm('请确认是否要清除追帧脚本的所有配置（包括缓存的原画链接），重置为默认配置，并刷新页面？')) {
+                    setTimeout(() => {
+                        if (confirm('请再次确认是否清除所有配置')) {
+                            clearStoredValues();
+                            location.reload();
+                        }
+                    }, 1000);
+                }
+            },
             'copy-playurl': event => {
                 const room_id = getRoomId();
                 if (!room_id) return;
@@ -931,7 +964,8 @@
             } else if (node.id === 'reset-AV-sync') {
                 setOnclick(node, event => { AVResync(); });
             } else {
-                console.error('[bililive-seeker] No behavior bound to button ' + node.id);
+                setOnclick(node, event => { alert('No behavior is assigned for this button'); console.warn('[bililive-seeker] No behavior bound to button ' + node.id); });
+                console.warn('[bililive-seeker] No behavior bound to button ' + node.id);
             }
         })
 
@@ -980,12 +1014,12 @@
                 node.style.marginTop = '-20px';
                 node.style.alignItems = 'flex-end';
                 waitForQuery('#playback-rate-username', node => { node.style.display = 'none'; }, 100);
-                waitForQuery('#playback-rate-title', node => { node.style.display = ''; }, 100);
+                waitForQuery('#playback-rate-title', node => { node.style.display = ''; node.parentElement.style.paddingBottom = '16px'; }, 100);
             } else {
                 node.style.marginTop = '';
                 node.style.alignItems = '';
                 waitForQuery('#playback-rate-username', node => { node.style.display = ''; }, 100);
-                waitForQuery('#playback-rate-title', node => { node.style.display = 'none'; }, 100);
+                waitForQuery('#playback-rate-title', node => { node.style.display = 'none'; node.parentElement.style.paddingBottom = ''; }, 100);
             }
         });
         observer.observe(node);
