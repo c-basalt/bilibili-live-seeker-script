@@ -695,7 +695,7 @@
             waitForQuery('#head-info-vm .lower-row', _ => {
                 console.log('[bililive-seeker] Removing reset button');
                 document.querySelector('#reset-seeker-configs-fallback').parentElement.remove();
-            });
+            }, 180*1000);
         }, 3000);
     });
 
@@ -1003,7 +1003,7 @@
         }
 
         expiredPlayurlChecker();
-    }, 30000);
+    }, 180*1000);
 
     waitForQuery('#head-info-vm .lower-row .right-ctnr', node => {
         const getBottom = (e) => { const rect = e.getBoundingClientRect(); return rect.y + rect.height; }
@@ -1023,7 +1023,7 @@
             }
         });
         observer.observe(node);
-    });
+    }, 180*1000);
 
     // ----------------------- 显示折叠UI -----------------------
 
@@ -1063,7 +1063,7 @@
         }
         node.appendChild(e);
         updatePanelHideState();
-    })
+    }, 180*1000);
 
 
 })();
