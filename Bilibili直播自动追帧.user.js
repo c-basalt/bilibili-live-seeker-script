@@ -120,7 +120,7 @@
     };
     const clearStoredValues = () => {
         listStoredKeys().forEach(key => { deleteStoredValue(key) });
-        // setStoredValue('version', 1);
+        setStoredValue('version', 1);
     }
 
     /** @template T * @param {string} key * @param {(value: any) => T} filterFunc * @returns {T} */
