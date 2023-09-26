@@ -49,7 +49,7 @@
                 try {
                     const value = typeName === 'string' ? localStorage.getItem(key) : JSON.parse(localStorage.getItem(key));
                     console.log('migrate', key, value);
-                    if (typeof value === typeName) {
+                    if (value !== null && typeof value === typeName) {
                         if (key === 'playurl-custom-endpoint') {
                             GM_setValue('playinfo-custom-endpoint', value);
                         } else {
@@ -143,6 +143,8 @@
     const getStoredNumber = key => getStoredValueWithFilter(key, numberOrNull);
     /** @param {string} key * @returns {string|null} */
     const getStoredString = key => getStoredValueWithFilter(key, stringOrNull);
+    /** @param {string} key * @returns {object} */
+    const getStoredObject = key => getStoredValueWithFilter(key, value => value);
 
 
     /** @param {string} key * @param {boolean} [fallback] * @returns {boolean|null} */
@@ -263,7 +265,7 @@
             const bufferLen = getBufferlen(v)
             if (bufferLen === null) return;
             let diffThres, rate;
-            const speedupThres = getStoredValue('speedup-thres');
+            const speedupThres = getStoredObject('speedup-thres');
             for (let i = 0; i < speedupThres.length; i++) {
                 [diffThres, rate] = speedupThres[i];
                 if (bufferLen - thres > diffThres) {
@@ -290,7 +292,7 @@
             const bufferLen = getBufferlen(v)
             if (bufferLen === null) return;
             let thres, rate;
-            const speeddownThres = getStoredValue('speeddown-thres');
+            const speeddownThres = getStoredObject('speeddown-thres');
             for (let i = 0; i < speeddownThres.length; i++) {
                 [thres, rate] = speeddownThres[i];
                 if (bufferLen < thres) {
@@ -862,7 +864,7 @@
                 }
             },
             'set-speedup-thres': event => {
-                const storedThres = JSON.stringify(getStoredValue('speedup-thres'));
+                const storedThres = JSON.stringify(getStoredObject('speedup-thres'));
                 const value = prompt("请输入想要设定的追帧加速阈值\nJSON格式为[[缓冲长度阈值(秒), 播放速率],...]\n留空点击确定以恢复默认值", storedThres);
                 if (value === null || value === storedThres) return;
                 if (value === "") {
@@ -878,7 +880,7 @@
                 }
             },
             'set-slowdown-thres': event => {
-                const storedThres = JSON.stringify(getStoredValue('speeddown-thres'));
+                const storedThres = JSON.stringify(getStoredObject('speeddown-thres'));
                 const value = prompt("请输入想要设定的自动减速阈值\nJSON格式为[[缓冲长度阈值(秒), 播放速率],...]\n留空点击确定以恢复默认值", storedThres);
                 if (value === null || value === storedThres) return;
                 if (value === "") {
