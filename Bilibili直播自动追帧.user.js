@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.7.5
+// @version      0.7.6
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -243,7 +243,7 @@
     /** @param {HTMLVideoElement} v * @returns {number|null} */
     const getBufferlen = (v) => {
         try {
-            const buffer_len = Number(v.buffered.end(0) - v.currentTime);
+            const buffer_len = Number(v.buffered.end(v.buffered.length - 1) - v.currentTime);
             return (!Number.isNaN(buffer_len))? buffer_len : null;
         } catch (e) {
             console.error('[bililive-seeker] failed to get buffer length\n', e);
@@ -314,10 +314,10 @@
     /** @type {number|undefined} */
     let avResyncIntervalId;
     const AVResync = () => {
-        console.debug("[bililive-seeker] enforce AV sync")
         const v = getLiveVideoElement();
         const step = getNumValue('AV-resync-step', true);
         if (!v || step === null) return;
+        console.debug("[bililive-seeker] enforce AV sync")
         v.currentTime = v.currentTime + step;
     }
     const stopAutoResync = () => {
