@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.7.6
+// @version      0.7.7
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -612,6 +612,41 @@
     } catch (e) {
         console.error('[bililive-seeker] Falied to hook `XMLHttpRequest.responseText`, possibly due to effect of another script. auto-quality and force-flv may not work as intended:\n', e);
     }
+
+
+    try {
+        let __embed_player;
+        const prevPlayerDesc = Object.getOwnPropertyDescriptor(W, 'EmbedPlayer');
+
+        Object.defineProperty(W, 'EmbedPlayer', {
+            get: function () {
+                const player = prevPlayerDesc?.get ? prevPlayerDesc.get.call(this) : __embed_player;
+
+                if (player?.instance?.getPlayerInfo && !player?.instance?.__bililive_seeker_hooked) {
+                    const origGetter = player.instance.getPlayerInfo.bind(player.instance);
+                    player.instance.getPlayerInfo = () => {
+                        const info = origGetter();
+                        info.qualityCandidates = info.qualityCandidates.filter(i => i.qn === info.quality);
+                        return info;
+                    }
+                    player.instance.__bililive_seeker_hooked = true;
+                    console.debug('[bililive-seeker] `window.EmbedPlayer.getPlayerInfo` hooked');
+                }
+                return player;
+            },
+            set: function (player) {
+                if (prevPlayerDesc?.set) {
+                    prevPlayerDesc.set.call(this, player);
+                }
+                __embed_player = player;
+            },
+            configurable: true,
+        });
+        console.debug('[bililive-seeker] `window.EmbedPlayer` hooked');
+    } catch (e) {
+        console.error('[bililive-seeker] Falied to hook `EmbedPlayer`, possibly due to effect of another script.\n', e);
+    }
+
 
     try {
         let __init_data_neptune;
