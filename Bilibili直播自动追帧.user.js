@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.7.7
+// @version      0.7.8
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -516,8 +516,8 @@
             url = url.replace(/qn=0\b/, 'qn=10000');
         }
         if (isChecked('force-flv', true)) {
-            url = url.replace(/protocol=0,[^&]+/, 'protocol=0');
-            url = url.replace(/codec=0,[^&]+/, 'codec=0');
+            url = url.replace(/protocol=0(?:,|%2C)[^&]+/, 'protocol=0');
+            url = url.replace(/codec=0(?:,|%2C)[^&]+/, 'codec=0');
         }
         const endpoint = getStoredString('playinfo-custom-endpoint');
         if (endpoint) {
@@ -586,7 +586,7 @@
             return origOpen.apply(this, arguments);
         }
     } catch (e) {
-        console.error('[bililive-seeker] Falied to hook `XMLHttpRequest.open`\n', e);
+        console.error('[bililive-seeker] Failed to hook `XMLHttpRequest.open`\n', e);
     }
 
     try {
@@ -610,7 +610,7 @@
             configurable: true
         });
     } catch (e) {
-        console.error('[bililive-seeker] Falied to hook `XMLHttpRequest.responseText`, possibly due to effect of another script. auto-quality and force-flv may not work as intended:\n', e);
+        console.error('[bililive-seeker] Failed to hook `XMLHttpRequest.responseText`, possibly due to effect of another script. auto-quality and force-flv may not work as intended:\n', e);
     }
 
 
@@ -644,7 +644,7 @@
         });
         console.debug('[bililive-seeker] `window.EmbedPlayer` hooked');
     } catch (e) {
-        console.error('[bililive-seeker] Falied to hook `EmbedPlayer`, possibly due to effect of another script.\n', e);
+        console.error('[bililive-seeker] Failed to hook `EmbedPlayer`, possibly due to effect of another script.\n', e);
     }
 
 
@@ -683,7 +683,7 @@
             configurable: true,
         });
     } catch (e) {
-        console.error('[bililive-seeker] Falied to hook `__NEPTUNE_IS_MY_WAIFU__`, possibly due to effect of another script. auto-quality and force-flv may not work as intended:\n', e);
+        console.error('[bililive-seeker] Failed to hook `__NEPTUNE_IS_MY_WAIFU__`, possibly due to effect of another script. auto-quality and force-flv may not work as intended:\n', e);
     }
 
 
