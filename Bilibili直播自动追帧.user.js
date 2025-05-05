@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.7.8
+// @version      0.7.9
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -365,7 +365,7 @@
     /** @param {number} [timeout] */
     const checkIsLiveReload = (timeout) => {
         if (isLiveStream(null) === false) {
-            W.fetch("https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=" + getRoomId() + "&protocol=0&format=0,1,2&codec=0&qn=10000&platform=web")
+            W.fetch(formatPlayurlReq(getRoomId()))
                 .then(r => r.json())
                 .then(r => {
                 console.debug('[bililive-seeker] live status', r.data?.live_status);
@@ -420,22 +420,26 @@
             if (request.status === 200) {
                 return JSON.parse(request.responseText);
             } else {
-                console.error('[bililive-seeker] request failed with status ' + request.status + ' for ' + url);
+                console.error(`[bililive-seeker] request failed with status ${request.status} for "${url}"`);
             }
         } catch (e) {
-            console.error('[bililive-seeker] failed to get data from ' + url + '\n', e);
+            console.error(`[bililive-seeker] failed to get data from "${url}" \n`, e);
         }
     }
+
+    /** @param {number|string} room_id */
+    const formatPlayurlReq = (room_id) => `https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=${room_id}&protocol=0,1&format=0,1,2&codec=0,1&qn=10000&platform=web&dolby=5&panorama=1`;
+
     /** @param {number} room_id */
     const getPlayUrl = (room_id) => {
         console.debug('[bililive-seeker] request playurl');
-        const rsp = xhrGetApi("https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=" + room_id + "&protocol=0,1&format=0,1,2&codec=0,1&qn=10000&platform=web&dolby=5&panorama=1");
+        const rsp = xhrGetApi(formatPlayurlReq(room_id));
         return rsp?.data?.playurl_info?.playurl;
     }
     const getRoomInit = () => {
         try {
-            const roomId = location.href.match(/\/(\d+)(\?|$)/)[1];
-            const rsp = xhrGetApi("https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=" + roomId + "&protocol=0,1&format=0,1,2&codec=0,1&qn=10000&platform=web&dolby=5&panorama=1");
+            const room_id = location.href.match(/\/(\d+)(\?|$)/)[1];
+            const rsp = xhrGetApi(formatPlayurlReq(room_id));
             if (rsp) cacheRoomInit(rsp);
         } catch (e) {
             console.error('[bililive-seeker] failed to request room init data\n', e);
@@ -444,6 +448,9 @@
 
 
     // ----------------------- 网络请求hook -----------------------
+
+    /** @param {number} timeout */
+    const asyncSleep = (timeout) => new Promise(r => setTimeout(() => r(timeout), timeout));
 
     const cacheRoomInit = (roomInitRsp) => {
         if (W.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data) return;
@@ -502,11 +509,23 @@
         if (!playurl) return r;
         cachePlayUrl(playurl);
         console.debug('[bililive-seeker] got playinfo', r);
-        if (!isChecked('force-raw', true)) return r;
-        expiredPlayurlChecker();
-        const cachedUrl = getStoredValue('playurl-' + playurl.cid);
-        console.debug('[bililive-seeker] load cached url', cachedUrl);
-        if (cachedUrl) r.data.playurl_info.playurl = cachedUrl;
+        if (isChecked('force-raw', true)) {
+            expiredPlayurlChecker();
+            const cachedUrl = getStoredValue('playurl-' + playurl.cid);
+            console.debug('[bililive-seeker] load cached url', cachedUrl);
+            if (cachedUrl) r.data.playurl_info.playurl = cachedUrl;
+        }
+        if (isChecked('force-flv', true)) {
+            console.debug('[bililive-seeker] filter video formats');
+            const filteredStream = playurl.stream.filter(i => i.protocol_name !== "http_hls");
+            if (filteredStream.length) playurl.stream = filteredStream;
+            playurl.stream.forEach(i => {
+                i.format.forEach(j => {
+                    const filteredCodec = j.codec.filter(k => k.codec_name !== "hevc");
+                    if (filteredCodec.length) j.codec = filteredCodec;
+                });
+            });
+        }
         return r;
     }
 
@@ -561,7 +580,7 @@
             hookFetch();
             for (let i = 0; i < 50; i++) {
                 await W.fetch('//_test_hook_alive_dummy_url/').catch(e => { hookFetch(); });
-                await new Promise(r => setTimeout(r, 100)); //async sleep 100ms
+                await asyncSleep(100);
             }
         } catch (e) {
             console.error('[bililive-seeker] error while hooking `window.fetch`\n', e);
@@ -613,79 +632,51 @@
         console.error('[bililive-seeker] Failed to hook `XMLHttpRequest.responseText`, possibly due to effect of another script. auto-quality and force-flv may not work as intended:\n', e);
     }
 
-
-    try {
-        let __embed_player;
-        const prevPlayerDesc = Object.getOwnPropertyDescriptor(W, 'EmbedPlayer');
-
-        Object.defineProperty(W, 'EmbedPlayer', {
-            get: function () {
-                const player = prevPlayerDesc?.get ? prevPlayerDesc.get.call(this) : __embed_player;
-
-                if (player?.instance?.getPlayerInfo && !player?.instance?.__bililive_seeker_hooked) {
-                    const origGetter = player.instance.getPlayerInfo.bind(player.instance);
-                    player.instance.getPlayerInfo = () => {
-                        const info = origGetter();
-                        info.qualityCandidates = info.qualityCandidates.filter(i => i.qn === info.quality);
-                        return info;
-                    }
-                    player.instance.__bililive_seeker_hooked = true;
-                    console.debug('[bililive-seeker] `window.EmbedPlayer.getPlayerInfo` hooked');
-                }
-                return player;
-            },
-            set: function (player) {
-                if (prevPlayerDesc?.set) {
-                    prevPlayerDesc.set.call(this, player);
-                }
-                __embed_player = player;
-            },
-            configurable: true,
-        });
-        console.debug('[bililive-seeker] `window.EmbedPlayer` hooked');
-    } catch (e) {
-        console.error('[bililive-seeker] Failed to hook `EmbedPlayer`, possibly due to effect of another script.\n', e);
+    /** @param {any} W * @param {string} key * @param {number} sleep * @param {number} timeout * @param {(obj: any) => any} exec */
+    const waitForWindowObj = async (W, key, sleep, timeout, exec) => {
+        for (let i = 0; timeout > 0; i++) {
+            if (W[key]) {
+                console.debug(`[bililive-seeker] loop=${i} processing "${key}"`);
+                exec(W[key]);
+                return;
+            }
+            timeout -= await asyncSleep(sleep);
+        }
+        console.debug(`[bililive-seeker] no "${key}" found to process`);
     }
 
+    // Object.is(window.EmbedPlayer.instance, window.livePlayer) => true
+    waitForWindowObj(W, 'livePlayer', 1000, 90000, (player) => {
+        if (player.getPlayerInfo && !player.__bililive_seeker_hooked) {
+            const origGetter = player.getPlayerInfo.bind(player);
+            player.getPlayerInfo = () => {
+                const info = origGetter();
+                info.qualityCandidates = info.qualityCandidates.filter(i => !(Number(i.qn) < Number(info.quality)));
+                return info;
+            };
+            player.__bililive_seeker_hooked = true;
+            console.debug('[bililive-seeker] `window.livePlayer.getPlayerInfo` hooked');
+        }
+        if (getStoredBoolean('auto-quality')) {
+            console.debug('[bililive-seeker] switching original quality');
+            if (Number(player.getPlayerInfo().quality) < 10000) player.switchQuality('10000');
+        }
+    });
 
-    try {
-        let __init_data_neptune;
-        Object.defineProperty(W, '__NEPTUNE_IS_MY_WAIFU__', {
-            get: function () { return __init_data_neptune },
-            set: function (newdata) {
-                if (newdata.roomInitRes?.data?.playurl_info?.playurl?.stream) {
-                    let playurl = newdata.roomInitRes.data.playurl_info.playurl;
-                    if (getStoredBoolean('auto-quality')) {
-                        console.debug('[bililive-seeker] getting original quality');
-                        if (playurl.stream[0].format[0].codec[0].current_qn < 10000) {
-                            playurl = getPlayUrl(newdata.roomInitRes.data.room_id) || playurl;
-                            newdata.roomInitRes.data.playurl_info.playurl = playurl;
-                        }
-                    }
-                    if (getStoredBoolean('force-flv')) {
-                        console.debug('[bililive-seeker] filter video formats');
-                        const filteredStream = playurl.stream.filter(i => i.protocol_name !== "http_hls");
-                        if (filteredStream.length) playurl.stream = filteredStream;
-                        playurl.stream.forEach(i => {
-                            i.format.forEach(j => {
-                                const filteredCodec = j.codec.filter(k => k.codec_name !== "hevc");
-                                if (filteredCodec.length) j.codec = filteredCodec;
-                            })
-                        });
-                    }
-                }
-                if (newdata.roomInitRes) {
-                    newdata.roomInitRes = interceptPlayurl(newdata.roomInitRes);
-                }
-                __init_data_neptune = newdata;
-                console.debug('[bililive-seeker] init data', __init_data_neptune);
-            },
-            configurable: true,
-        });
-    } catch (e) {
-        console.error('[bililive-seeker] Failed to hook `__NEPTUNE_IS_MY_WAIFU__`, possibly due to effect of another script. auto-quality and force-flv may not work as intended:\n', e);
-    }
-
+    waitForWindowObj(W, '__NEPTUNE_IS_MY_WAIFU__', 10, 30000, (init_data) => {
+        if (init_data?.roomInitRes) {
+            init_data.roomInitRes = interceptPlayurl(init_data.roomInitRes);
+        }
+        const stream = init_data?.roomInitRes?.data?.playurl_info?.playurl?.stream;
+        if (stream?.length && getStoredBoolean('auto-quality')) {
+            if (stream[0].format[0].codec[0].current_qn < 10000) {
+                room_init_res_cache = init_data.roomInitRes;
+                console.debug('[bililive-seeker] dropping non-original quality');
+                init_data.roomInitRes = null;
+            }
+        }
+        console.debug('[bililive-seeker] `window.__NEPTUNE_IS_MY_WAIFU__` processed');
+    });
 
     // ----------------------- 选项UI -----------------------
 
