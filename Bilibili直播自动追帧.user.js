@@ -534,10 +534,6 @@
         if (isChecked('auto-quality', true)) {
             url = url.replace(/qn=0\b/, 'qn=10000');
         }
-        if (isChecked('force-flv', true)) {
-            url = url.replace(/protocol=0(?:,|%2C)[^&]+/, 'protocol=0');
-            url = url.replace(/codec=0(?:,|%2C)[^&]+/, 'codec=0');
-        }
         const endpoint = getStoredString('playinfo-custom-endpoint');
         if (endpoint) {
             url = url.replace(/^\/\//, 'https://');
@@ -632,21 +628,7 @@
         console.error('[bililive-seeker] Failed to hook `XMLHttpRequest.responseText`, possibly due to effect of another script. auto-quality and force-flv may not work as intended:\n', e);
     }
 
-    /** @param {any} W * @param {string} key * @param {number} sleep * @param {number} timeout * @param {(obj: any) => any} exec */
-    const waitForWindowObj = async (W, key, sleep, timeout, exec) => {
-        for (let i = 0; timeout > 0; i++) {
-            if (W[key]) {
-                console.debug(`[bililive-seeker] loop=${i} processing "${key}"`);
-                exec(W[key]);
-                return;
-            }
-            timeout -= await asyncSleep(sleep);
-        }
-        console.debug(`[bililive-seeker] no "${key}" found to process`);
-    }
-
-    // Object.is(window.EmbedPlayer.instance, window.livePlayer) => true
-    waitForWindowObj(W, 'livePlayer', 1000, 90000, (player) => {
+    const hookPlayer = (player) => {
         if (player.getPlayerInfo && !player.__bililive_seeker_hooked) {
             const origGetter = player.getPlayerInfo.bind(player);
             player.getPlayerInfo = () => {
@@ -657,26 +639,52 @@
             player.__bililive_seeker_hooked = true;
             console.debug('[bililive-seeker] `window.livePlayer.getPlayerInfo` hooked');
         }
-        if (getStoredBoolean('auto-quality')) {
+        if (getStoredBoolean('auto-quality') && Number(player.getPlayerInfo().quality) < 10000) {
             console.debug('[bililive-seeker] switching original quality');
-            if (Number(player.getPlayerInfo().quality) < 10000) player.switchQuality('10000');
+            player.switchQuality('10000');
+        } else if (getStoredBoolean('force-flv') && player.getPlayerInfo().playurl.match('.m3u8')) {
+            console.debug('[bililive-seeker] reload player to try getting flv format');
+            player.reload();
         }
-    });
+    };
 
-    waitForWindowObj(W, '__NEPTUNE_IS_MY_WAIFU__', 10, 30000, (init_data) => {
-        if (init_data?.roomInitRes) {
-            init_data.roomInitRes = interceptPlayurl(init_data.roomInitRes);
-        }
-        const stream = init_data?.roomInitRes?.data?.playurl_info?.playurl?.stream;
-        if (stream?.length && getStoredBoolean('auto-quality')) {
-            if (stream[0].format[0].codec[0].current_qn < 10000) {
-                room_init_res_cache = init_data.roomInitRes;
-                console.debug('[bililive-seeker] dropping non-original quality');
-                init_data.roomInitRes = null;
+    const waitForPlayer = async () => {
+        for (let i = 0; i < 120; i++) {
+            if (W.livePlayer) {
+                hookPlayer(W.livePlayer);
+                return;
             }
+            await asyncSleep(500);
         }
-        console.debug('[bililive-seeker] `window.__NEPTUNE_IS_MY_WAIFU__` processed');
-    });
+    };
+    waitForPlayer();
+
+    try {
+        let __init_data_neptune = W.__NEPTUNE_IS_MY_WAIFU__ || {};
+        Object.defineProperty(W, '__NEPTUNE_IS_MY_WAIFU__', {
+            get: function () { return __init_data_neptune },
+            set: function (init_data) {
+                __init_data_neptune = init_data;
+                if (init_data?.roomInitRes) {
+                    init_data.roomInitRes = interceptPlayurl(init_data.roomInitRes);
+                }
+                console.debug('[bililive-seeker] init data', __init_data_neptune);
+                const stream = init_data?.roomInitRes?.data?.playurl_info?.playurl?.stream;
+                if (stream?.length && getStoredBoolean('auto-quality')) {
+                    if (stream[0].format[0].codec[0].current_qn < 10000) {
+                        room_init_res_cache = init_data.roomInitRes;
+                        console.debug('[bililive-seeker] dropping non-original quality');
+                        init_data.roomInitRes = null;
+                    }
+                }
+            },
+            configurable: true,
+        });
+        if (__init_data_neptune?.roomInitRes) W.__NEPTUNE_IS_MY_WAIFU__ = __init_data_neptune;
+    } catch (e) {
+        console.error('[bililive-seeker] Failed to hook `__NEPTUNE_IS_MY_WAIFU__`, possibly due to effect of another script. auto-quality and force-flv may not work as intended:\n', e);
+    }
+
 
     // ----------------------- 选项UI -----------------------
 
