@@ -505,7 +505,7 @@
     const checkPlayurlIntervalId = setInterval(() => { expiredPlayurlChecker() }, 600 * 1000);
 
     const interceptPlayurl = (r) => {
-        const playurl = r.data?.playurl_info?.playurl;
+        let playurl = r.data?.playurl_info?.playurl;
         if (!playurl) return r;
         cachePlayUrl(playurl);
         console.debug('[bililive-seeker] got playinfo', r);
@@ -513,10 +513,9 @@
             expiredPlayurlChecker();
             const cachedUrl = getStoredValue('playurl-' + playurl.cid);
             console.debug('[bililive-seeker] load cached url', cachedUrl);
-            if (cachedUrl) r.data.playurl_info.playurl = cachedUrl;
+            if (cachedUrl) playurl = r.data.playurl_info.playurl = cachedUrl;
         }
         if (isChecked('force-flv', true)) {
-            console.debug('[bililive-seeker] filter video formats');
             const filteredStream = playurl.stream.filter(i => i.protocol_name !== "http_hls");
             if (filteredStream.length) playurl.stream = filteredStream;
             playurl.stream.forEach(i => {
@@ -525,6 +524,7 @@
                     if (filteredCodec.length) j.codec = filteredCodec;
                 });
             });
+            console.debug('[bililive-seeker] filter video formats', r.data.playurl_info.playurl.stream);
         }
         return r;
     }
