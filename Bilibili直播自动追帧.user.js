@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.7.9
+// @version      0.7.10
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -506,25 +506,29 @@
 
     const interceptPlayurl = (r) => {
         let playurl = r.data?.playurl_info?.playurl;
-        if (!playurl) return r;
-        cachePlayUrl(playurl);
-        console.debug('[bililive-seeker] got playinfo', r);
-        if (isChecked('force-raw', true)) {
-            expiredPlayurlChecker();
-            const cachedUrl = getStoredValue('playurl-' + playurl.cid);
-            console.debug('[bililive-seeker] load cached url', cachedUrl);
-            if (cachedUrl) playurl = r.data.playurl_info.playurl = cachedUrl;
-        }
-        if (isChecked('force-flv', true)) {
-            const filteredStream = playurl.stream.filter(i => i.protocol_name !== "http_hls");
-            if (filteredStream.length) playurl.stream = filteredStream;
-            playurl.stream.forEach(i => {
-                i.format.forEach(j => {
-                    const filteredCodec = j.codec.filter(k => k.codec_name !== "hevc");
-                    if (filteredCodec.length) j.codec = filteredCodec;
+        if (playurl) {
+            cachePlayUrl(playurl);
+            console.debug('[bililive-seeker] got playinfo', r);
+            if (isChecked('force-raw', true)) {
+                expiredPlayurlChecker();
+                const cachedUrl = getStoredValue('playurl-' + playurl.cid);
+                console.debug('[bililive-seeker] load cached url', cachedUrl);
+                if (cachedUrl) playurl = r.data.playurl_info.playurl = cachedUrl;
+            }
+            if (isChecked('force-flv', true)) {
+                const filteredStream = playurl.stream.filter(i => i.protocol_name !== "http_hls");
+                if (filteredStream.length) playurl.stream = filteredStream;
+                playurl.stream.forEach(i => {
+                    i.format.forEach(j => {
+                        const filteredCodec = j.codec.filter(k => k.codec_name !== "hevc");
+                        if (filteredCodec.length) j.codec = filteredCodec;
+                    });
                 });
-            });
-            console.debug('[bililive-seeker] filter video formats', r.data.playurl_info.playurl.stream);
+                console.debug('[bililive-seeker] filter video formats', r.data?.playurl_info?.playurl?.stream);
+            }
+        }
+        if (isChecked('block-roundplay', true) && r.data?.live_status === 2) {
+            r.data.live_status = 0;
         }
         return r;
     }
@@ -557,6 +561,7 @@
                     console.debug('[bililive-seeker] modified roomPlayInfo fetch request', arguments);
                     const response = await origFetch.apply(this, arguments);
                     const r = interceptPlayurl(await response.clone().json());
+                    console.debug('[bililive-seeker] modified roomPlayInfo fetch response', r);
                     return new Response(JSON.stringify(r), response);
                 } else if (url.match('api.live.bilibili.com/live/getRoundPlayVideo') && isChecked('block-roundplay', true)) {
                     console.debug('[bililive-seeker] block roundplay');
