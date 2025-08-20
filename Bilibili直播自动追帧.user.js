@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.7.10
+// @version      0.7.11
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -809,7 +809,7 @@
             '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.6);} #seeker-control-panel input { vertical-align: middle; margin:1px; }' +
             '#seeker-control-panel label.danmaku-lost, #seeker-control-panel label.live-on, #seeker-control-panel label.video-error, #seeker-control-panel label.reload { color: orange!important; filter: none; }</style>'
         );
-        controlPanel.style.cssText = 'text-align: right; flex: 0 0 fit-content; margin-left: 5px; margin-top: -5px;';
+        controlPanel.style.cssText = 'text-align: right; flex: 0 0 fit-content; margin-left: 5px; margin-top: -5px; z-index: 999;';
         controlPanel.id = 'seeker-control-panel';
         node.appendChild(controlPanel);
 
