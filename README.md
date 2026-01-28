@@ -77,7 +77,7 @@ https://greasyfork.org/zh-CN/scripts/453967
 
 ## 需求和问题反馈
 
-可以[通过B站联系我](https://space.bilibili.com/521676)，但修不修看我个人兴趣。建议直接自己动手更快
+可以在Github上[新建issue](https://github.com/c-basalt/bilibili-live-seeker-script/issues/new)反馈遇到的问题
 
 ## 原理
 

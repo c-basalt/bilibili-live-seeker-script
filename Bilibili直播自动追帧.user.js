@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.7.11
+// @version      0.7.12
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
 // @icon         https://www.bilibili.com/favicon.ico
 // @license      GPLv3 License
 // @homepageURL  https://github.com/c-basalt/bilibili-live-seeker-script/
-// @supportURL   https://space.bilibili.com/521676
+// @supportURL   https://github.com/c-basalt/bilibili-live-seeker-script/issues
 // @run-at       document-start
 // @grant        unsafeWindow
 // @grant        GM_setValue
