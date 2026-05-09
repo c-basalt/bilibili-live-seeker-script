@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.7.13
+// @version      0.7.15
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -740,7 +740,7 @@
         }, 3000);
     });
 
-    waitForQuery('#head-info-vm .right-fixed-modules', node => {
+    waitForQuery('#head-info-vm .normal-row-ctnr', node => {
         const controlPanel = document.createElement("span");
         controlPanel.innerHTML = (
             '<span id="basic-settings-page">' +
@@ -803,13 +803,13 @@
             '  </span>' +
             '</span>' +
 
-            '<style>#seeker-control-panel button, #seeker-control-panel a { width:5.5em;padding:1px;background: transparent; border: 1.5px solid #999; border-radius: 4px; color: #999; filter: contrast(0.6);}' +
+            '<style>#seeker-control-panel button, #seeker-control-panel a { width:5.5em; padding:0px; background: transparent; border: 1.5px solid #999; border-radius: 4px; color: #999; filter: contrast(0.6); }' +
             '#seeker-control-panel input[type="number"] { border: 1.5px solid #999; border-radius: 2px; }'+
             '#seeker-control-panel button:hover, #seeker-control-panel a:hover { filter: none; } #seeker-control-panel button:active { filter: none; transform: translate(0.3px, 0.3px); }' +
             '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.6);} #seeker-control-panel input { vertical-align: middle; margin:1px; }' +
             '#seeker-control-panel label.danmaku-lost, #seeker-control-panel label.live-on, #seeker-control-panel label.video-error, #seeker-control-panel label.reload { color: orange!important; filter: none; }</style>'
         );
-        controlPanel.style.cssText = 'text-align: right; flex: 0 0 fit-content; margin-left: 5px; margin-top: -5px; z-index: 999;';
+        controlPanel.style.cssText = 'text-align: right; flex: 0 0 fit-content; font-size: 11px; z-index: 999;';
         controlPanel.id = 'seeker-control-panel';
         node.appendChild(controlPanel);
 
@@ -1073,38 +1073,26 @@
         if (getStoredBoolean('hide-seeker-control-panel')) {
             waitForQuery('#seeker-control-panel', node => { node.style.display = 'none'; });
             waitForQuery('#control-panel-showhide span', node => { node.innerText = '显示追帧'; });
-            waitForQuery('#head-info-vm .upper-row .right-ctnr', node => { node.style.marginTop = ''; });
-            waitForQuery('#head-info-vm .lower-row', node => { node.style.marginTop = ''; });
-            waitForQuery('#head-info-vm .lower-row .right-ctnr', node => { node.style.flex = ''; node.style.flexWrap = ''; node.style.placeContent = ''; node.style.rowGap = ''; });
-
-            waitForQuery('#head-info-vm .lower-row .pk-act-left-distance', node => { node.style.maxWidth = ''; }, 15000);
-            waitForQuery('#head-info-vm .lower-row .act-left-distance', node => { node.style.maxWidth = ''; }, 15000);
-            waitForQuery('#head-info-vm .lower-row .gift-planet-entry', node => { node.style.marginLeft = ''; }, 15000);
+            waitForQuery('#head-info-vm .right-section', node => { node.style.justifyContent = ''; }, 15000);
         } else {
             waitForQuery('#seeker-control-panel', node => { node.style.display = ''; });
             waitForQuery('#control-panel-showhide span', node => { node.innerText = '隐藏追帧'; });
-            waitForQuery('#head-info-vm .upper-row .right-ctnr', node => { node.style.marginTop = '-7px'; });
-            waitForQuery('#head-info-vm .lower-row', node => { node.style.marginTop = '0px'; });
-            waitForQuery('#head-info-vm .lower-row .right-ctnr', node => { node.style.flex = '100 1 auto'; node.style.flexWrap = 'wrap'; node.style.placeContent = 'space-around center'; node.style.rowGap = '5px'; });
-
-            waitForQuery('#head-info-vm .lower-row .pk-act-left-distance', node => { node.style.maxWidth = '3px'; }, 15000);
-            waitForQuery('#head-info-vm .lower-row .act-left-distance', node => { node.style.maxWidth = '3px'; }, 15000);
-            waitForQuery('#head-info-vm .lower-row .gift-planet-entry', node => { node.style.marginLeft = '5px'; }, 15000);
+            waitForQuery('#head-info-vm .right-section', node => { node.style.justifyContent = 'center'; }, 15000);
         }
     }
 
-    waitForQuery('#head-info-vm .upper-row .right-ctnr', node => {
+    waitForQuery('#head-info-vm .right-fixed-modules', node => {
         const e = document.createElement("div");
         e.id = 'control-panel-showhide';
         e.className = "icon-ctnr live-skin-normal-a-text pointer";
-        e.innerHTML = '<i class="v-middle icon-font icon-danmu-a" style="margin-left:16px; font-size:16px;"></i><span class="action-text v-middle" style="margin-left:8px; font-size:12px;"></span>';
+        e.innerHTML = '<i class="v-middle icon-font icon-danmu-a" style="font-size: 13px;"></i><span class="action-text v-middle" style="margin-left: 4px;"></span>';
         e.onclick = () => {
             setStoredValue('hide-seeker-control-panel', !getStoredBoolean('hide-seeker-control-panel'));
             updatePanelHideState();
         }
-        node.appendChild(e);
+        node.insertBefore(e, node.children[0]);
+        node.style.cssText = 'flex-direction: column; gap: 0px';
         updatePanelHideState();
     }, 180*1000);
-
 
 })();
