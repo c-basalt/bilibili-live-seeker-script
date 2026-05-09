@@ -28,7 +28,6 @@
         const version = GM_getValue('version', 0);
         if (version < 1) {
             Object.entries({
-                'auto-blanc': 'boolean',
                 'auto-AV-sync': 'boolean',
                 'hide-stats': 'boolean',
                 'auto-reload': 'boolean',
@@ -85,7 +84,6 @@
     // ----------------------- 获取参数 -----------------------
 
     const defaultValues = {
-        'auto-blanc': false,
         'auto-AV-sync': false,
         'hide-stats': false,
         'auto-reload': true,
@@ -743,40 +741,6 @@
     });
 
     waitForQuery('#head-info-vm .right-fixed-modules', node => {
-        const blancUrl = `/blanc${location.pathname}`
-        const storedAutoBlanc = getStoredBoolean('auto-blanc');
-        let autoBlancId = storedAutoBlanc ? setTimeout(() => {console.log("perform jump"); W.location = blancUrl}, 3e3) : null;
-
-        const miniPanel = document.createElement("span");
-        miniPanel.innerHTML = (
-            '<span title="自动跳转至旧版界面直播间" style="margin-right: 10px">' +
-            `  <label for="auto-blanc" class="live-skin-normal-a-text" ${storedAutoBlanc ? 'style="color: orange!important;"' : ""}>自动旧版</label>` +
-            `  <input type="checkbox" id="auto-blanc" ${storedAutoBlanc ? "checked" : ""}>` +
-            '</span><span title="跳转至旧版界面直播间">' +
-            `  <a id="blanc-fallback" class="live-skin-normal-a-text" href="${blancUrl}">转至旧版界面（追帧有效）</a>` +
-            '</span>' +
-
-            '<style>#blanc-fallback { display: inline-block; text-align: center; width: 7em; padding:1px; background: transparent; border: 1.5px solid #999; border-radius: 4px; color: #999; filter: contrast(0.6);}' +
-            '#blanc-fallback:hover { filter: none; }</style>'
-        )
-        miniPanel.style="display: flex; align-items: center";
-        waitForQuery('#auto-blanc', node => {
-            node.onchange = () => {
-                setStoredValue(node.id, Boolean(node.checked));
-                if (autoBlancId) {
-                    console.log("[bililive-seeker] unset blanc jump");
-                    waitForQuery('label[for="auto-blanc"]', node => node.style="");
-                    clearTimeout(autoBlancId);
-                    autoBlancId = null;
-                }
-            }
-        });
-
-        node.appendChild(miniPanel);
-        console.log('[bililive-seeker] Add blanc minipanel')
-    })
-
-    waitForQuery('#head-info-vm .lower-row', node => {
         const controlPanel = document.createElement("span");
         controlPanel.innerHTML = (
             '<span id="basic-settings-page">' +
@@ -802,9 +766,6 @@
             '<br>' +
             '  <span title="跳转至非活动页面的常规直播间">' +
             '<a id="go-to-blanc-room" style="display: none; text-align: center; width: 7.5em" target="_parent">转至常规直播间</a>' +
-            '  </span>' +
-            '  <span id="auto-blanc-choice" title="自动跳转至旧版界面直播间">' +
-            '<label for="auto-blanc" class="live-skin-normal-a-text">自动旧版</label><input type="checkbox" id="auto-blanc">' +
             '  </span>' +
             '<button id="go-to-adv-settings" type="button" style="width: 7em">转到高级选项</button>' +
             '  <span title="本地播放器追帧的目标缓冲长度，单位为秒（播放器缓冲的长度1：1等于播放器产生的延迟）  &#13;&#10;过小容易导致卡顿甚至丢失原画的连接  &#13;&#10;需根据自己的网络情况选择合适的值  &#13;&#10;可在高级选项中关闭追帧">' +
@@ -1079,9 +1040,6 @@
                 const node = /** @type {HTMLAnchorElement} */ (_node);
                 node.style.display = "inline-block";
                 node.href = location.href;
-            });
-            waitForQuery('#auto-blanc-choice', _node => {
-                _node.style.display = "none";
             });
         }
 
