@@ -428,7 +428,7 @@
     }
 
     /** @param {number|string} room_id */
-    const formatPlayurlReq = (room_id) => `https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=${room_id}&protocol=0,1&format=0,1,2&codec=0,1&qn=10000&platform=web&dolby=5&panorama=1`;
+    const formatPlayurlReq = (room_id) => `https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=${room_id}&protocol=0,1&format=0,1,2&codec=0,1&qn=25000&platform=web&dolby=5&panorama=1`;
 
     /** @param {number} room_id */
     const getPlayUrl = (room_id) => {
@@ -462,12 +462,20 @@
         if (!playurl?.stream) return;
         try {
             console.debug('[bililive-seeker] playurl', playurl);
-            const baseurl = playurl.stream[0].format[0].codec[0].base_url;
-            const qn = playurl.stream[0].format[0].codec[0].current_qn;
-            if (qn === 10000 && baseurl.match(/\/live_\d+(?:_bs)?_\d+(?:_[0-9a-f]{8})?\.flv/)) {
-                // 未二压的链接格式
-                console.debug('[bililive-seeker] caching raw stream url', baseurl);
-                setStoredValue('playurl-' + playurl.cid, playurl);
+            // 会进入 cache 的是整个 playurl 对象，所以全部遍历，命中即缓存并结束函数
+            for (const curStream of playurl.stream ?? []) {
+                for (const curFormat of curStream.format ?? []) {
+                    for (const curCodecInfo of curFormat.codec ?? []) {
+                        const qn = curCodecInfo?.current_qn ?? 0;
+                        // 假定拿到的是官方数据源，且 extra 内包含 tracker param
+                        if ((qn === 10000 || qn === 25000) && curCodecInfo?.url_info?.[0]?.extra?.includes('suffix=origin')) {
+                            // 未二压的链接格式
+                            console.debug('[bililive-seeker] caching raw stream url', curCodecInfo.base_url);
+                            setStoredValue('playurl-' + playurl.cid, playurl);
+                            return;
+                        }
+                    }
+                }
             }
         } catch (e) {
             console.error('[bililive-seeker] Unexpected error when caching playurl:\n', e);
@@ -520,7 +528,10 @@
                 if (filteredStream.length) playurl.stream = filteredStream;
                 playurl.stream.forEach(i => {
                     i.format.forEach(j => {
-                        const filteredCodec = j.codec.filter(k => k.codec_name !== "hevc");
+                        // 只有 av1 必定是二次编码
+                        // hdr 可能为二编（LPL/KPL），也可能是原生（春晚CCTV1）
+                        // 原生 hevc 已经开放给直播姬用户，不可以过滤
+                        const filteredCodec = j.codec.filter(k => k.codec_name !== "av1");
                         if (filteredCodec.length) j.codec = filteredCodec;
                     });
                 });
@@ -536,7 +547,7 @@
     /** @param {string} url * @returns {string} */
     const replaceRoomplayReqUrl = (url) => {
         if (isChecked('auto-quality', true)) {
-            url = url.replace(/qn=0\b/, 'qn=10000');
+            url = url.replace(/qn=0\b/, 'qn=25000').replace(/qn=10000\b/, 'qn=25000');
         }
         const endpoint = getStoredString('playinfo-custom-endpoint');
         if (endpoint) {
@@ -754,8 +765,8 @@
             '<label for="auto-reload">自动刷新</label><input type="checkbox" id="auto-reload">' +
             '  </span>' +
             '<br>' +
-            '  <span title="尝试去除视频流中的HEVC(“PRO”画质)和HLS流，让播放器优先使用FLV协议的AVC流，以降低延迟">' +
-            '<label for="force-flv">强制avc+flv</label><input type="checkbox" id="force-flv">' +
+            '  <span title="尝试去除视频流中的AV1编码和HLS流，让播放器优先使用FLV协议的原画流，以降低延迟">' +
+            '<label for="force-flv">强制flv</label><input type="checkbox" id="force-flv">' +
             '  </span><span title="当获取的直播视频流为延迟更高的二压视频时，尝试替换为保存的原画流，以降低延迟  &#13;&#10;当前直播间没有保存原画流/原画流已过期时，选择框为灰色  &#13;&#10;主播网络卡顿/重开推流后可能出现一直重复最后几秒的情况，需取消该选项后切换一次画质或刷新">' +
             '<label for="force-raw">强制原画</label><input type="checkbox" id="force-raw" style="filter: grayscale(1) brightness(1.5)">' +
             '  </span><span title="进入直播间时自动切换右下角的“原画”画质。和手动切换效果相同">' +
