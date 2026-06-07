@@ -131,11 +131,11 @@
     }
 
     /** @param {any} value * @returns {boolean|null} */
-    const booleanOrNull = value => (typeof value === 'boolean')? value : null;
+    const booleanOrNull = value => (typeof value === 'boolean') ? value : null;
     /** @param {any} value * @returns {number|null} */
-    const numberOrNull = value => (value !== null && !Number.isNaN(Number(value)))? Number(value) : null;
+    const numberOrNull = value => (value !== null && !Number.isNaN(Number(value))) ? Number(value) : null;
     /** @param {any} value * @returns {string|null} */
-    const stringOrNull = value => (typeof value === 'string')? value : null;
+    const stringOrNull = value => (typeof value === 'string') ? value : null;
 
     /** @param {string} key * @returns {boolean|null} */
     const getStoredBoolean = key => getStoredValueWithFilter(key, booleanOrNull);
@@ -170,7 +170,7 @@
     const getRoomId = () => {
         const _getRoomId = () => {
             const room_id = Number(W.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.room_id || room_init_res_cache?.data?.room_id);
-            return (!Number.isNaN(room_id))? room_id : null;
+            return (!Number.isNaN(room_id)) ? room_id : null;
         }
         if (!_getRoomId()) getRoomInit();
         try {
@@ -244,7 +244,7 @@
     const getBufferlen = (v) => {
         try {
             const buffer_len = Number(v.buffered.end(v.buffered.length - 1) - v.currentTime);
-            return (!Number.isNaN(buffer_len))? buffer_len : null;
+            return (!Number.isNaN(buffer_len)) ? buffer_len : null;
         } catch (e) {
             console.error('[bililive-seeker] failed to get buffer length\n', e);
             return null;
@@ -368,21 +368,21 @@
             W.fetch(formatPlayurlReq(getRoomId()))
                 .then(r => r.json())
                 .then(r => {
-                console.debug('[bililive-seeker] live status', r.data?.live_status);
-                if (!isChecked('auto-reload', false)) return
-                if (r.data?.live_status === 1) {
-                    // 0: 闲置，1: 直播，2: 轮播
-                    const reloadLabel = document.querySelector('label[for="auto-reload"]');
-                    if (timeout) {
-                        setTimeout(() => { checkIsLiveReload() }, timeout);
-                        if (reloadLabel) reloadLabel.classList.add('live-on');
-                        return;
-                    } else {
-                        if (reloadLabel) reloadLabel.classList.add('reload');
-                        W.location.reload();
+                    console.debug('[bililive-seeker] live status', r.data?.live_status);
+                    if (!isChecked('auto-reload', false)) return
+                    if (r.data?.live_status === 1) {
+                        // 0: 闲置，1: 直播，2: 轮播
+                        const reloadLabel = document.querySelector('label[for="auto-reload"]');
+                        if (timeout) {
+                            setTimeout(() => { checkIsLiveReload() }, timeout);
+                            if (reloadLabel) reloadLabel.classList.add('live-on');
+                            return;
+                        } else {
+                            if (reloadLabel) reloadLabel.classList.add('reload');
+                            W.location.reload();
+                        }
                     }
-                }
-            });
+                });
         }
         document.querySelector('label[for="auto-reload"]').classList.remove('live-on');
     }
@@ -472,7 +472,7 @@
     /** @param {any} uid * @param {any} codec */
     const isOriginalCodec = (uid, codec) =>
         codec.current_qn >= 10000 && codec.base_url.match(/\/live_\d+(?:_bs)?_\d+(?:_[0-9a-f]{8})?\.flv/) ||
-            codec.base_url.match(new RegExp(`/live_${base36Encode(Number(uid))}_[A-Za-z0-9]+_[a-z0-9]+\\.flv`));
+        codec.base_url.match(new RegExp(`/live_${base36Encode(Number(uid))}_[A-Za-z0-9]+_[a-z0-9]+\\.flv`));
 
     /** @param {any} uid * @param {any} playurl */
     const cachePlayUrl = (uid, playurl) => {
@@ -570,10 +570,10 @@
             try {
                 /** @type {URL | RequestInfo} */
                 const resource = arguments[0];
-                let url = (resource instanceof Request)? resource.url : resource.toString();
+                let url = (resource instanceof Request) ? resource.url : resource.toString();
                 if (url.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo')) {
                     url = replaceRoomplayReqUrl(url);
-                    arguments[0] = (resource instanceof Request)? new Request(url, resource) : url;
+                    arguments[0] = (resource instanceof Request) ? new Request(url, resource) : url;
                     // since this should only be GET request
                     console.debug('[bililive-seeker] modified roomPlayInfo fetch request', arguments);
                     const response = await origFetch.apply(this, arguments);
@@ -760,7 +760,7 @@
             waitForQuery('#head-info-vm .lower-row', _ => {
                 console.log('[bililive-seeker] Removing reset button');
                 document.querySelector('#reset-seeker-configs-fallback').parentElement.remove();
-            }, 180*1000);
+            }, 180 * 1000);
         }, 3000);
     });
 
@@ -778,7 +778,7 @@
             '<label for="auto-reload">自动刷新</label><input type="checkbox" id="auto-reload">' +
             '  </span>' +
             '<br>' +
-            '  <span title="尝试去除视频流中的HLS流，让播放器优先使用FLV协议，并且在检测到原画时去掉非原画编码类型，以降低延迟">' +
+            '  <span title="尝试去除视频流中的HLS流，让播放器优先使用FLV协议，&#13;&#10并在检测到原画时只保留原画对应的编码类型，以降低延迟">' +
             '<label for="force-flv">强制flv+原编码</label><input type="checkbox" id="force-flv">' +
             '  </span><span title="当获取的直播视频流为延迟更高的二压视频时，尝试替换为保存的原画流，以降低延迟  &#13;&#10;当前直播间没有保存原画流/原画流已过期时，选择框为灰色  &#13;&#10;主播网络卡顿/重开推流后可能出现一直重复最后几秒的情况，需取消该选项后切换一次画质或刷新">' +
             '<label for="force-raw">强制原画</label><input type="checkbox" id="force-raw" style="filter: grayscale(1) brightness(1.5)">' +
@@ -828,7 +828,7 @@
             '</span>' +
 
             '<style>#seeker-control-panel button, #seeker-control-panel a { width:5.5em; padding:0px; background: transparent; border: 1.5px solid #999; border-radius: 4px; color: #999; filter: contrast(0.6); }' +
-            '#seeker-control-panel input[type="number"] { border: 1.5px solid #999; border-radius: 2px; }'+
+            '#seeker-control-panel input[type="number"] { border: 1.5px solid #999; border-radius: 2px; }' +
             '#seeker-control-panel button:hover, #seeker-control-panel a:hover { filter: none; } #seeker-control-panel button:active { filter: none; transform: translate(0.3px, 0.3px); }' +
             '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.6);} #seeker-control-panel input { vertical-align: middle; margin:1px; }' +
             '#seeker-control-panel label.danmaku-lost, #seeker-control-panel label.live-on, #seeker-control-panel label.video-error, #seeker-control-panel label.reload { color: orange!important; filter: none; }</style>'
@@ -1068,7 +1068,7 @@
         }
 
         expiredPlayurlChecker();
-    }, 180*1000);
+    }, 180 * 1000);
 
     waitForQuery('#head-info-vm .lower-row .right-ctnr', node => {
         const getBottom = (e) => { const rect = e.getBoundingClientRect(); return rect.y + rect.height; }
@@ -1088,7 +1088,7 @@
             }
         });
         observer.observe(node);
-    }, 180*1000);
+    }, 180 * 1000);
 
     // ----------------------- 显示折叠UI -----------------------
 
@@ -1117,6 +1117,6 @@
         node.insertBefore(e, node.children[0]);
         node.style.cssText = 'flex-direction: column; gap: 0px';
         updatePanelHideState();
-    }, 180*1000);
+    }, 180 * 1000);
 
 })();
