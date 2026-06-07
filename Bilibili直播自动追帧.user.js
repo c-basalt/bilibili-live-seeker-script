@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.7.15
+// @version      0.7.16
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -428,7 +428,7 @@
     }
 
     /** @param {number|string} room_id */
-    const formatPlayurlReq = (room_id) => `https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=${room_id}&protocol=0,1&format=0,1,2&codec=0,1&qn=10000&platform=web&dolby=5&panorama=1`;
+    const formatPlayurlReq = (room_id) => `https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=${room_id}&protocol=0,1&format=0,1,2&codec=0,1&qn=30000&platform=web&dolby=5&panorama=1`;
 
     /** @param {number} room_id */
     const getPlayUrl = (room_id) => {
@@ -458,15 +458,32 @@
         room_init_res_cache = roomInitRsp;
         console.debug('[bililive-seeker] roominit cached', room_init_res_cache);
     }
-    const cachePlayUrl = (playurl) => {
+
+    /** @param {number} num * @returns {string} */
+    const base36Encode = (num) => {
+        let result = '';
+        while (num > 0) {
+            result = '0123456789abcdefghijklmnopqrstuvwxyz'[num % 36] + result;
+            num = Math.floor(num / 36);
+        }
+        return result || '0';
+    }
+
+    /** @param {any} uid * @param {any} codec */
+    const isOriginalCodec = (uid, codec) =>
+        codec.current_qn >= 10000 && codec.base_url.match(/\/live_\d+(?:_bs)?_\d+(?:_[0-9a-f]{8})?\.flv/) ||
+            codec.base_url.match(new RegExp(`/live_${base36Encode(Number(uid))}_[A-Za-z0-9]+_[a-z0-9]+\\.flv`));
+
+    /** @param {any} uid * @param {any} playurl */
+    const cachePlayUrl = (uid, playurl) => {
         if (!playurl?.stream) return;
         try {
             console.debug('[bililive-seeker] playurl', playurl);
-            const baseurl = playurl.stream[0].format[0].codec[0].base_url;
-            const qn = playurl.stream[0].format[0].codec[0].current_qn;
-            if (qn === 10000 && baseurl.match(/\/live_\d+(?:_bs)?_\d+(?:_[0-9a-f]{8})?\.flv/)) {
-                // 未二压的链接格式
-                console.debug('[bililive-seeker] caching raw stream url', baseurl);
+            const containsOriginal = playurl.stream.some(
+                stream => stream.format.some(format => format.codec.some(codec => isOriginalCodec(uid, codec)))
+            );
+            if (containsOriginal) {
+                console.debug('[bililive-seeker] caching raw stream url');
                 setStoredValue('playurl-' + playurl.cid, playurl);
             }
         } catch (e) {
@@ -507,7 +524,7 @@
     const interceptPlayurl = (r) => {
         let playurl = r.data?.playurl_info?.playurl;
         if (playurl) {
-            cachePlayUrl(playurl);
+            cachePlayUrl(r.data.uid, playurl);
             console.debug('[bililive-seeker] got playinfo', r);
             if (isChecked('force-raw', true)) {
                 expiredPlayurlChecker();
@@ -518,10 +535,10 @@
             if (isChecked('force-flv', true)) {
                 const filteredStream = playurl.stream.filter(i => i.protocol_name !== "http_hls");
                 if (filteredStream.length) playurl.stream = filteredStream;
-                playurl.stream.forEach(i => {
-                    i.format.forEach(j => {
-                        const filteredCodec = j.codec.filter(k => k.codec_name !== "hevc");
-                        if (filteredCodec.length) j.codec = filteredCodec;
+                playurl.stream.forEach(stream => {
+                    stream.format.forEach(format => {
+                        const filteredCodec = format.codec.filter(codec => isOriginalCodec(r.data.uid, codec));
+                        if (filteredCodec.length) format.codec = filteredCodec;
                     });
                 });
                 console.debug('[bililive-seeker] filter video formats', r.data?.playurl_info?.playurl?.stream);
@@ -536,7 +553,7 @@
     /** @param {string} url * @returns {string} */
     const replaceRoomplayReqUrl = (url) => {
         if (isChecked('auto-quality', true)) {
-            url = url.replace(/qn=0\b/, 'qn=10000');
+            url = url.replace(/qn=0\b/, 'qn=30000');
         }
         const endpoint = getStoredString('playinfo-custom-endpoint');
         if (endpoint) {
@@ -644,9 +661,13 @@
             player.__bililive_seeker_hooked = true;
             console.debug('[bililive-seeker] `window.livePlayer.getPlayerInfo` hooked');
         }
-        if (getStoredBoolean('auto-quality') && Number(player.getPlayerInfo().quality) < 10000) {
-            console.debug('[bililive-seeker] switching original quality');
-            player.switchQuality('10000');
+        if (getStoredBoolean('auto-quality')) {
+            const info = player.getPlayerInfo();
+            const maxQuality = Math.max(...info.qualityCandidates.map(i => Number(i.qn)));
+            if ((Number(info.quality) < maxQuality)) {
+                console.debug('[bililive-seeker] switching original quality');
+                player.switchQuality(maxQuality.toString());
+            }
         } else if (getStoredBoolean('force-flv') && player.getPlayerInfo().playurl.match('.m3u8')) {
             console.debug('[bililive-seeker] reload player to try getting flv format');
             player.reload();
@@ -676,10 +697,13 @@
                 console.debug('[bililive-seeker] init data', __init_data_neptune);
                 const stream = init_data?.roomInitRes?.data?.playurl_info?.playurl?.stream;
                 if (stream?.length && getStoredBoolean('auto-quality')) {
-                    if (stream[0].format[0].codec[0].current_qn < 10000) {
+                    const codec = stream[0].format[0].codec[0];
+                    if (codec.current_qn < Math.max(...codec.accept_qn, 10000)) {
                         room_init_res_cache = init_data.roomInitRes;
-                        console.debug('[bililive-seeker] dropping non-original quality');
+                        console.debug('[bililive-seeker] dropping non-original quality', codec.current_qn);
                         init_data.roomInitRes = null;
+                    } else {
+                        console.debug('[bililive-seeker] keeping init with quality', codec.current_qn);
                     }
                 }
             },
@@ -754,8 +778,8 @@
             '<label for="auto-reload">自动刷新</label><input type="checkbox" id="auto-reload">' +
             '  </span>' +
             '<br>' +
-            '  <span title="尝试去除视频流中的HEVC(“PRO”画质)和HLS流，让播放器优先使用FLV协议的AVC流，以降低延迟">' +
-            '<label for="force-flv">强制avc+flv</label><input type="checkbox" id="force-flv">' +
+            '  <span title="尝试去除视频流中的HLS流，让播放器优先使用FLV协议，并且在检测到原画时去掉非原画编码类型，以降低延迟">' +
+            '<label for="force-flv">强制flv+原编码</label><input type="checkbox" id="force-flv">' +
             '  </span><span title="当获取的直播视频流为延迟更高的二压视频时，尝试替换为保存的原画流，以降低延迟  &#13;&#10;当前直播间没有保存原画流/原画流已过期时，选择框为灰色  &#13;&#10;主播网络卡顿/重开推流后可能出现一直重复最后几秒的情况，需取消该选项后切换一次画质或刷新">' +
             '<label for="force-raw">强制原画</label><input type="checkbox" id="force-raw" style="filter: grayscale(1) brightness(1.5)">' +
             '  </span><span title="进入直播间时自动切换右下角的“原画”画质。和手动切换效果相同">' +
