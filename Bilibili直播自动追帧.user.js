@@ -428,7 +428,7 @@
     }
 
     /** @param {number|string} room_id */
-    const formatPlayurlReq = (room_id) => `https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=${room_id}&protocol=0,1&format=0,1,2&codec=0,1&qn=30000&platform=web&dolby=5&panorama=1`;
+    const formatPlayurlReq = (room_id) => `https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=${room_id}&protocol=0,1&format=0,1,2&codec=0,1&qn=0&platform=web&dolby=5&panorama=1`;
 
     /** @param {number} room_id */
     const getPlayUrl = (room_id) => {
@@ -469,27 +469,15 @@
         return result || '0';
     }
 
-    /** @param {any} uid * @param {any} codec */
-    const isOriginalCodec = (uid, codec) =>
-        codec.current_qn >= 10000 && codec.base_url.match(/\/live_\d+(?:_bs)?_\d+(?:_[0-9a-f]{8})?\.flv/) ||
-        codec.base_url.match(new RegExp(`/live_${base36Encode(Number(uid))}_[A-Za-z0-9]+_[a-z0-9]+\\.flv`));
+    /** @param {any} uid * @param {string} url */
+    const isOriginalUrl = (uid, url) =>
+        url.match(/\/live_\d+(?:_bs)?_\d+(?:_[0-9a-f]{8})?\.flv/)
+        || url.match(new RegExp(`/live_${base36Encode(Number(uid))}_[A-Za-z0-9]+_[a-z0-9]+\\.flv`));
 
     /** @param {any} uid * @param {any} playurl */
-    const cachePlayUrl = (uid, playurl) => {
-        if (!playurl?.stream) return;
-        try {
-            console.debug('[bililive-seeker] playurl', playurl);
-            const containsOriginal = playurl.stream.some(
-                stream => stream.format.some(format => format.codec.some(codec => isOriginalCodec(uid, codec)))
-            );
-            if (containsOriginal) {
-                console.debug('[bililive-seeker] caching raw stream url');
-                setStoredValue('playurl-' + playurl.cid, playurl);
-            }
-        } catch (e) {
-            console.error('[bililive-seeker] Unexpected error when caching playurl:\n', e);
-        }
-    }
+    const containsOriginal = (uid, playurl) => playurl.stream.some(
+        stream => stream.format.some(format => format.codec.some(codec => isOriginalUrl(uid, codec.base_url)))
+    );
 
     const expiredPlayurlChecker = () => {
         listStoredKeys().filter(key => key.match(/^playurl-\d+$/)).forEach(key => {
@@ -523,8 +511,29 @@
 
     const interceptPlayurl = (r) => {
         let playurl = r.data?.playurl_info?.playurl;
-        if (playurl) {
-            cachePlayUrl(r.data.uid, playurl);
+        if (playurl?.stream) {
+            if (containsOriginal(r.data.uid, playurl)) {
+                console.debug('[bililive-seeker] caching raw stream url');
+                setStoredValue('playurl-' + playurl.cid, playurl);
+            } else {
+                playurl.stream.forEach(stream => stream.format.forEach(format => format.codec.forEach(codec => {
+                    if (!codec.accept_qn.includes(25000)) {
+                        codec.accept_qn.splice(0, 0, 25000);
+                    }
+                })));
+                playurl.g_qn_desc.splice(1, 0, {
+                    "qn": 25000,
+                    "desc": "隐藏原画",
+                    "hdr_desc": "",
+                    "attr_desc": null,
+                    "hdr_type": 0,
+                    "media_base_desc": {
+                        "detail_desc": { "desc": "尝试获取原画" },
+                        "brief_desc": { "desc": "原画" }
+                    },
+                    "eotf": 0
+                });
+            }
             console.debug('[bililive-seeker] got playinfo', r);
             if (isChecked('force-raw', true)) {
                 expiredPlayurlChecker();
@@ -535,12 +544,10 @@
             if (isChecked('force-flv', true)) {
                 const filteredStream = playurl.stream.filter(i => i.protocol_name !== "http_hls");
                 if (filteredStream.length) playurl.stream = filteredStream;
-                playurl.stream.forEach(stream => {
-                    stream.format.forEach(format => {
-                        const filteredCodec = format.codec.filter(codec => isOriginalCodec(r.data.uid, codec));
-                        if (filteredCodec.length) format.codec = filteredCodec;
-                    });
-                });
+                playurl.stream.forEach(stream => stream.format.forEach(format => {
+                    const filteredCodec = format.codec.filter(codec => isOriginalUrl(r.data.uid, codec.base_url));
+                    if (filteredCodec.length) format.codec = filteredCodec;
+                }));
                 console.debug('[bililive-seeker] filter video formats', r.data?.playurl_info?.playurl?.stream);
             }
         }
@@ -553,7 +560,7 @@
     /** @param {string} url * @returns {string} */
     const replaceRoomplayReqUrl = (url) => {
         if (isChecked('auto-quality', true)) {
-            url = url.replace(/qn=0\b/, 'qn=30000');
+            url = url.replace(/qn=0\b/, 'qn=25000');
         }
         const endpoint = getStoredString('playinfo-custom-endpoint');
         if (endpoint) {
@@ -665,7 +672,7 @@
             const info = player.getPlayerInfo();
             const maxQuality = Math.max(...info.qualityCandidates.map(i => Number(i.qn)));
             if ((Number(info.quality) < maxQuality)) {
-                console.debug('[bililive-seeker] switching original quality');
+                console.debug('[bililive-seeker] switching to highest quality', maxQuality);
                 player.switchQuality(maxQuality.toString());
             }
         } else if (getStoredBoolean('force-flv') && player.getPlayerInfo().playurl.match('.m3u8')) {
