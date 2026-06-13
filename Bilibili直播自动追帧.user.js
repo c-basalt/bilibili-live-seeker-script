@@ -180,6 +180,20 @@
             return null;
         }
     };
+    /** @returns {number|null} */
+    const getUid = () => {
+        const _getUid = () => {
+            const uid = Number(W.__NEPTUNE_IS_MY_WAIFU__?.roomInitRes?.data?.uid || room_init_res_cache?.data?.uid);
+            return (!Number.isNaN(uid)) ? uid : null;
+        }
+        if (!_getUid()) getRoomInit();
+        try {
+            return _getUid() || Number(location.href.match(/\/(\d+)/)[1]);
+        } catch (e) {
+            console.error('[bililive-seeker] Failed to get uid\n', e)
+            return null;
+        }
+    };
 
 
     // ----------------------- 播放器追帧 -----------------------
@@ -657,7 +671,7 @@
         console.error('[bililive-seeker] Failed to hook `XMLHttpRequest.responseText`, possibly due to effect of another script. auto-quality and force-flv may not work as intended:\n', e);
     }
 
-    const hookPlayer = (player) => {
+    const hookPlayer = async (player) => {
         if (player.getPlayerInfo && !player.__bililive_seeker_hooked) {
             const origGetter = player.getPlayerInfo.bind(player);
             player.getPlayerInfo = () => {
@@ -669,11 +683,16 @@
             console.debug('[bililive-seeker] `window.livePlayer.getPlayerInfo` hooked');
         }
         if (getStoredBoolean('auto-quality')) {
-            const info = player.getPlayerInfo();
-            const maxQuality = Math.max(...info.qualityCandidates.map(i => Number(i.qn)));
-            if ((Number(info.quality) < maxQuality)) {
-                console.debug('[bililive-seeker] switching to highest quality', maxQuality);
-                player.switchQuality(maxQuality.toString());
+            for (let i = 0; i < 3; i++) {
+                const info = player.getPlayerInfo();
+                const maxQuality = Math.max(...info.qualityCandidates.map(i => Number(i.qn)));
+                if (Number(info.quality) < maxQuality || !isOriginalUrl(getUid(), info.playurl)) {
+                    console.debug('[bililive-seeker] switching to highest quality', maxQuality);
+                    player.switchQuality(maxQuality.toString());
+                    await asyncSleep(1000);
+                } else {
+                    break;
+                }
             }
         } else if (getStoredBoolean('force-flv') && player.getPlayerInfo().playurl.match('.m3u8')) {
             console.debug('[bililive-seeker] reload player to try getting flv format');
