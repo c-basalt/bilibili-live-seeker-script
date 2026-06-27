@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.7.16
+// @version      0.7.17
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -686,11 +686,15 @@
             for (let i = 0; i < 3; i++) {
                 const info = player.getPlayerInfo();
                 const maxQuality = Math.max(...info.qualityCandidates.map(i => Number(i.qn)));
-                if (Number(info.quality) < maxQuality || !isOriginalUrl(getUid(), info.playurl)) {
+                // info.playurl might be empty string during loading
+                const isOriginal = isOriginalUrl(getUid(), info.playurl || `/${info.streamName}.flv`);
+
+                if (Number(info.quality) < maxQuality || (!isOriginal && Number(info.quality) < 25000)) {
                     console.debug('[bililive-seeker] switching to highest quality', maxQuality);
                     player.switchQuality(maxQuality.toString());
                     await asyncSleep(1000);
                 } else {
+                    console.debug('[bililive-seeker] keep current quality', info.quality, info.playurl || `/${info.streamName}.flv`);
                     break;
                 }
             }
