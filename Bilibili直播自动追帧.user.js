@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.7.17
+// @version      0.7.18
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -486,7 +486,7 @@
     /** @param {any} uid * @param {string} url */
     const isOriginalUrl = (uid, url) =>
         url.match(/\/live_\d+(?:_bs)?_\d+(?:_[0-9a-f]{8})?\.flv/)
-        || url.match(new RegExp(`/live_${base36Encode(Number(uid))}_[A-Za-z0-9]+_[a-z0-9]+\\.flv`));
+        || url.match(new RegExp(`/live_${base36Encode(Number(uid))}_(?:[A-Za-z0-9]+_[a-z0-9]+|\\d+_[A-Za-z0-9]+_[0-9a-f]{8})\\.flv`));
 
     /** @param {any} uid * @param {any} playurl */
     const containsOriginal = (uid, playurl) => playurl.stream.some(
@@ -535,18 +535,20 @@
                         codec.accept_qn.splice(0, 0, 25000);
                     }
                 })));
-                playurl.g_qn_desc.splice(1, 0, {
-                    "qn": 25000,
-                    "desc": "隐藏原画",
-                    "hdr_desc": "",
-                    "attr_desc": null,
-                    "hdr_type": 0,
-                    "media_base_desc": {
-                        "detail_desc": { "desc": "尝试获取原画" },
-                        "brief_desc": { "desc": "原画" }
-                    },
-                    "eotf": 0
-                });
+                if (!playurl.g_qn_desc.some(desc => desc.qn === 25000 && desc.media_base_desc)) {
+                    playurl.g_qn_desc.splice(1, 0, {
+                        "qn": 25000,
+                        "desc": "隐藏原画",
+                        "hdr_desc": "",
+                        "attr_desc": null,
+                        "hdr_type": 0,
+                        "media_base_desc": {
+                            "detail_desc": { "desc": "尝试获取原画" },
+                            "brief_desc": { "desc": "原画" }
+                        },
+                        "eotf": 0
+                    });
+                }
             }
             console.debug('[bililive-seeker] got playinfo', r);
             if (isChecked('force-raw', true)) {
