@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.7.19
+// @version      0.7.20
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -90,6 +90,7 @@
         'force-flv': true,
         'prevent-pause': false,
         'force-raw': false,
+        'hls-original': true,
         'auto-quality': true,
         'auto-speedup': true,
         'auto-slowdown': true,
@@ -248,6 +249,7 @@
     /** @param {HTMLVideoElement} v * @returns {number|null} */
     const getBufferlen = (v) => {
         try {
+            if (!v.buffered.length) return null; // 尚未开始缓冲
             const buffer_len = Number(v.buffered.end(v.buffered.length - 1) - v.currentTime);
             return (!Number.isNaN(buffer_len)) ? buffer_len : null;
         } catch (e) {
@@ -476,8 +478,183 @@
 
     /** @param {any} uid * @param {string} url */
     const isOriginalUrl = (uid, url) =>
-        url.match(/\/live_\d+(?:_bs)?_\d+(?:_[0-9a-f]{8})?\.flv/)
-        || url.match(new RegExp(`/live_${base36Encode(Number(uid))}_(?:[A-Za-z0-9]+_[a-z0-9]+|\\d+_[A-Za-z0-9]+_[0-9a-f]{8})\\.flv`));
+        url.match(/\/live_\d+(?:_bs)?_\d+(?:_[0-9a-f]{8})?(?:\.flv|\/index\.m3u8)/)
+        || url.match(new RegExp(`/live_${base36Encode(Number(uid))}_(?:[A-Za-z0-9]+_[a-z0-9]+|\\d+_[A-Za-z0-9]+_[0-9a-f]{8})(?:\\.flv|/index\\.m3u8)`));
+
+    // ----------------------- HLS 原画（play-gateway master） -----------------------
+    // 2026-11 起 getRoomPlayInfo 不再响应 qn=25000，但 play-gateway 的 master m3u8 在 qn=25000 时
+    // 仍会给出「原画真彩」(BILI-QN=25000) 的未二压 HLS fMP4 流，且不需要登录
+
+    /** @type {{ [room_id: string]: { ts: number, codecs: any[] } }} */
+    const hlsOriginalCache = {};
+
+    /** @param {number|string} room_id * @param {any} uid * @returns {any[]} codec 列表（可能为空） */
+    const getHlsOriginalCodecs = (room_id, uid) => {
+        const cached = hlsOriginalCache[room_id];
+        if (cached && Date.now() - cached.ts < 5 * 60 * 1000) return cached.codecs;
+        /** @type {any[]} */
+        const codecs = [];
+        try {
+            const request = new XMLHttpRequest();
+            request.open('GET', `https://api.live.bilibili.com/xlive/play-gateway/master/url?cid=${room_id}&mid=0&pt=web&p2p_type=-1&net=0&free_type=0&build=0&feature=2&qn=25000&drm_type=0&codec=0,1`, false);
+            request.send(null);
+            const text = request.status === 200 ? request.responseText : '';
+            if (!text.startsWith('#EXTM3U')) {
+                console.warn('[bililive-seeker] master m3u8 unavailable', request.status, text.slice(0, 100));
+            } else {
+                const lines = text.split('\n').map(l => l.trim());
+                /** @type {{ info: string, url: URL }[]} */
+                const variants = [];
+                lines.forEach((line, i) => {
+                    const next = lines[i + 1];
+                    if (line.startsWith('#EXT-X-STREAM-INF:') && next && !next.startsWith('#')) {
+                        variants.push({ info: line, url: new URL(next) });
+                    }
+                });
+                // 一般原画标为 BILI-QN=25000「原画真彩」；但主播推 HEVC 等情况下，
+                // 未二压的原画可能直接标为 BILI-QN=10000「原画」，此时按无后缀的原画文件名识别
+                let selected = variants.filter(v => /BILI-QN=25000\b/.test(v.info));
+                if (!selected.length) selected = variants.filter(v => isOriginalUrl(uid, v.url.pathname));
+                /** @type {{ [name: string]: any }} */
+                const byCodec = {};
+                selected.forEach(({ info: line, url }) => {
+                    const videoCodec = (line.match(/CODECS="([^",]+)/) || [])[1] || '';
+                    const name = videoCodec.startsWith('hvc1') || videoCodec.startsWith('hev1') ? 'hevc' : videoCodec.startsWith('av01') ? 'av1' : 'avc';
+                    if (!byCodec[name]) {
+                        byCodec[name] = {
+                            codec_name: name,
+                            current_qn: 25000,
+                            accept_qn: [25000],
+                            base_url: url.pathname + '?',
+                            url_info: [],
+                            hdr_qn: null,
+                            dolby_type: 0,
+                            attr_name: '',
+                            hdr_type: 0,
+                            drm: false,
+                            drm_key_systems: null,
+                            video_codecs: { base: videoCodec, ext: [''] },
+                            audio_codecs: { base: 'mp4a.40.2', ext: [''] },
+                            video_color_info: { colorspace: 'bt709', metadata_types: ['none'] },
+                        };
+                        codecs.push(byCodec[name]);
+                    }
+                    if (byCodec[name].base_url === url.pathname + '?') {
+                        byCodec[name].url_info.push({ host: url.origin, extra: url.search.slice(1), stream_ttl: 0 });
+                    }
+                });
+            }
+        } catch (e) {
+            console.error('[bililive-seeker] failed to get master m3u8\n', e);
+        }
+        console.debug('[bililive-seeker] hls original codecs', codecs);
+        hlsOriginalCache[room_id] = { ts: Date.now(), codecs };
+        return codecs;
+    }
+
+    /** 浏览器是否能解码该 codec；没有编码信息时视为可播放 @param {any} codec * @returns {boolean} */
+    const isCodecPlayable = (codec) => {
+        const base = codec?.video_codecs?.base;
+        if (!base) return true;
+        try {
+            const MS = W.MediaSource || W.ManagedMediaSource;
+            return !MS || MS.isTypeSupported(`video/mp4; codecs="${base}"`);
+        } catch (e) {
+            return true;
+        }
+    }
+
+    /**
+     * 播放器右键「切换解码策略」允许的编码（与播放器逻辑一致：[av1, hevc, avc].slice(选中项)，7 天后失效）
+     * @returns {string[]}
+     */
+    const getPlayerAllowedCodecs = () => {
+        const all = ['av1', 'hevc', 'avc'];
+        try {
+            const uid = (document.cookie.match(/(?:^|;\s*)DedeUserID=(\d+)/) || [])[1] || '0';
+            const config = JSON.parse(W.localStorage.getItem(`web-player-ui-config:${uid}`) || '{}');
+            const { val, ts } = config.selectedCodec || {};
+            if (!val || !all.includes(val) || Date.now() - Number(ts) > 6048e5) return all;
+            return all.slice(all.indexOf(val));
+        } catch (e) {
+            return all;
+        }
+    }
+
+    /**
+     * 播放器右键「切换解码策略」排除了原画编码（如锁定 AVC 而原画是 HEVC）时，需要保留 AVC 兜底，
+     * 否则播放器找不到流报 92006。不无条件保留：HLS 下有 AVC 时播放器会优先选 AVC 二压。
+     * @param {any[]} codecs
+     */
+    const needAvcFallback = (codecs) => {
+        if (codecs.some(codec => codec.codec_name === 'avc')) return false;
+        const allowed = getPlayerAllowedCodecs();
+        if (codecs.some(codec => allowed.includes(codec.codec_name))) return false;
+        console.warn('[bililive-seeker] player codec strategy excludes original codec, keep avc fallback', allowed);
+        return true;
+    }
+
+    /** @param {any} playurl * @returns {boolean} */
+    const hasPlayableCodec = (playurl) => playurl.stream.some(
+        stream => stream.format.some(format => format.codec.some(codec => isCodecPlayable(codec)))
+    );
+
+    /** @param {any} playurl * @param {any[]} codecs */
+    const injectHlsOriginal = (playurl, codecs) => {
+        // 合并原有 codec 的字段（session、media_info 等），并保留原有画质列表以便切换
+        const template = {};
+        playurl.stream.forEach(stream => stream.format.forEach(format => format.codec.forEach(codec => {
+            if (!template[codec.codec_name]) template[codec.codec_name] = codec;
+        })));
+        const merged = codecs.map(codec => {
+            const t = template[codec.codec_name] || template.avc || {};
+            const acceptQn = [25000, ...(t.accept_qn || []).filter(qn => qn !== 25000)];
+            return Object.assign({}, t, codec, { accept_qn: acceptQn, stream_resource_req: null });
+        });
+        // 原画不是 AVC 时，附上同协议（HLS fMP4）的 AVC 二压作为兜底，
+        // 以免播放器右键「切换解码策略」锁定 AVC 时找不到流（92006）
+        if (needAvcFallback(merged)) {
+            playurl.stream.forEach(stream => {
+                if (stream.protocol_name !== 'http_hls') return;
+                stream.format.forEach(format => {
+                    if (format.format_name !== 'fmp4') return;
+                    const avc = format.codec.find(codec => codec.codec_name === 'avc');
+                    if (avc && !merged.some(codec => codec.codec_name === 'avc')) merged.push(avc);
+                });
+            });
+        }
+        // 只保留 HLS fMP4 原画，并去掉 master_url，避免播放器无缝切换回二压流
+        playurl.stream = [{ protocol_name: 'http_hls', format: [{ format_name: 'fmp4', codec: merged }] }];
+    }
+
+    /** @param {any} playurl */
+    const ensureQn25000Desc = (playurl) => {
+        if (!playurl.g_qn_desc) return;
+        playurl.g_qn_desc = playurl.g_qn_desc.filter(desc => desc.qn !== 25000);
+        playurl.g_qn_desc.splice(0, 0, {
+            "qn": 25000,
+            "desc": "原画真彩",
+            "hdr_desc": "",
+            "attr_desc": null,
+            "hdr_type": 0,
+            "media_base_desc": {
+                "detail_desc": { "desc": "未二压的真原画" },
+                "brief_desc": { "desc": "原画", "badge": "真彩" }
+            },
+            "eotf": 0
+        });
+    }
+
+    /** @param {string|undefined} url * @returns {number|null} */
+    const getRequestedQn = (url) => {
+        try {
+            if (!url) return null;
+            const qn = new URL(url, location.href).searchParams.get('qn');
+            return qn === null ? null : Number(qn);
+        } catch (e) {
+            return null;
+        }
+    }
 
     /** @param {any} uid * @param {any} playurl */
     const containsOriginal = (uid, playurl) => playurl.stream.some(
@@ -514,10 +691,13 @@
     }
     const checkPlayurlIntervalId = setInterval(() => { expiredPlayurlChecker() }, 600 * 1000);
 
-    const interceptPlayurl = (r) => {
+    /** @param {any} r * @param {string} [reqUrl] 请求地址，用于判断请求的画质；初始数据没有地址 */
+    const interceptPlayurl = (r, reqUrl) => {
         let playurl = r.data?.playurl_info?.playurl;
+        let injectedHls = false;
         if (playurl?.stream) {
-            if (containsOriginal(r.data.uid, playurl)) {
+            const hasOriginal = containsOriginal(r.data.uid, playurl);
+            if (hasOriginal) {
                 console.debug('[bililive-seeker] caching raw stream url');
                 setStoredValue('playurl-' + playurl.cid, playurl);
             } else {
@@ -526,35 +706,52 @@
                         codec.accept_qn.splice(0, 0, 25000);
                     }
                 })));
-                if (!playurl.g_qn_desc.some(desc => desc.qn === 25000 && desc.media_base_desc)) {
-                    playurl.g_qn_desc.splice(1, 0, {
-                        "qn": 25000,
-                        "desc": "隐藏原画",
-                        "hdr_desc": "",
-                        "attr_desc": null,
-                        "hdr_type": 0,
-                        "media_base_desc": {
-                            "detail_desc": { "desc": "尝试获取原画" },
-                            "brief_desc": { "desc": "原画" }
-                        },
-                        "eotf": 0
-                    });
-                }
+                ensureQn25000Desc(playurl);
             }
             console.debug('[bililive-seeker] got playinfo', r);
+            let usedCache = false;
             if (isChecked('force-raw', true)) {
                 expiredPlayurlChecker();
                 const cachedUrl = getStoredValue('playurl-' + playurl.cid);
                 console.debug('[bililive-seeker] load cached url', cachedUrl);
-                if (cachedUrl) playurl = r.data.playurl_info.playurl = cachedUrl;
+                if (cachedUrl) {
+                    playurl = r.data.playurl_info.playurl = cachedUrl;
+                    usedCache = true;
+                }
             }
-            if (isChecked('force-flv', true)) {
+            // 优先级：响应自带的原画 / 缓存的原画 FLV > HLS 原画 > 二压
+            const requestedQn = getRequestedQn(reqUrl) ?? (isChecked('auto-quality', true) ? 25000 : 0);
+            if (!hasOriginal && !usedCache && requestedQn === 25000 && isChecked('hls-original', true)) {
+                const allCodecs = getHlsOriginalCodecs(playurl.cid || r.data.room_id, r.data.uid);
+                const codecs = allCodecs.filter(codec => isCodecPlayable(codec));
+                if (allCodecs.length && !codecs.length) {
+                    console.warn('[bililive-seeker] browser cannot decode hls original, skip', allCodecs.map(c => c.video_codecs.base));
+                }
+                if (codecs.length) {
+                    injectHlsOriginal(playurl, codecs);
+                    injectedHls = true;
+                    console.debug('[bililive-seeker] injected hls original', playurl.stream);
+                }
+            }
+            if (isChecked('force-flv', true) && !injectedHls) {
+                const unfilteredStream = JSON.parse(JSON.stringify(playurl.stream));
                 const filteredStream = playurl.stream.filter(i => i.protocol_name !== "http_hls");
-                if (filteredStream.length) playurl.stream = filteredStream;
+                if (filteredStream.length && hasPlayableCodec({ stream: filteredStream })) playurl.stream = filteredStream;
                 playurl.stream.forEach(stream => stream.format.forEach(format => {
-                    const filteredCodec = format.codec.filter(codec => isOriginalUrl(r.data.uid, codec.base_url));
-                    if (filteredCodec.length) format.codec = filteredCodec;
+                    // 只保留浏览器能解码的原画编码；原画不是 AVC 时保留 AVC 作为兜底，
+                    // 否则在播放器右键「切换解码策略」选了 AVC 时会因找不到流而报 92006
+                    const filteredCodec = format.codec.filter(codec => isOriginalUrl(r.data.uid, codec.base_url) && isCodecPlayable(codec));
+                    if (filteredCodec.length) {
+                        if (needAvcFallback(filteredCodec)) {
+                            filteredCodec.push(...format.codec.filter(codec => codec.codec_name === 'avc'));
+                        }
+                        format.codec = filteredCodec;
+                    }
                 }));
+                if (!hasPlayableCodec(playurl)) {
+                    console.warn('[bililive-seeker] force-flv left no playable codec, revert', playurl.stream);
+                    playurl.stream = unfilteredStream;
+                }
                 console.debug('[bililive-seeker] filter video formats', r.data?.playurl_info?.playurl?.stream);
             }
         }
@@ -591,7 +788,7 @@
                     // since this should only be GET request
                     console.debug('[bililive-seeker] modified roomPlayInfo fetch request', arguments);
                     const response = await origFetch.apply(this, arguments);
-                    const r = interceptPlayurl(await response.clone().json());
+                    const r = interceptPlayurl(await response.clone().json(), url);
                     console.debug('[bililive-seeker] modified roomPlayInfo fetch response', r);
                     return new Response(JSON.stringify(r), response);
                 } else if (url.match('api.live.bilibili.com/live/getRoundPlayVideo') && isChecked('block-roundplay', true)) {
@@ -648,7 +845,7 @@
                     if (this.responseURL.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo') || this.responseURL.match(getStoredString('playinfo-custom-endpoint'))) {
                         const rsp = JSON.parse(xhrAccessor.get.call(this));
                         cacheRoomInit(rsp);
-                        return JSON.stringify(interceptPlayurl(rsp));
+                        return JSON.stringify(interceptPlayurl(rsp, this.responseURL));
                     }
                 } catch (e) {
                     console.error('[bililive-seeker] error from hooked xhr.responseText\n', e);
@@ -691,7 +888,7 @@
                     break;
                 }
             }
-        } else if (getStoredBoolean('force-flv') && player.getPlayerInfo().playurl.match('.m3u8')) {
+        } else if (getStoredBoolean('force-flv') && player.getPlayerInfo().playurl.match('.m3u8') && !isOriginalUrl(getUid(), player.getPlayerInfo().playurl)) {
             console.debug('[bililive-seeker] reload player to try getting flv format');
             player.reload();
         }
@@ -813,6 +1010,8 @@
             '<label for="auto-quality">自动原画</label><input type="checkbox" id="auto-quality">' +
             '  </span><span title="阻止直播间进行轮播">' +
             '<label for="block-roundplay">阻止轮播</label><input type="checkbox" id="block-roundplay">' +
+            '  </span><span title="选择“原画真彩”画质且没有可用的原画FLV时，改用play-gateway提供的未二压HLS(fMP4)原画流  &#13;&#10;画质高于二压的“原画”，但HLS协议的延迟可能与二压FLV不同，可自行对比取舍">' +
+            '<label for="hls-original">HLS原画</label><input type="checkbox" id="hls-original">' +
             '  </span>' +
             '<br>' +
             '  <span title="跳转至非活动页面的常规直播间">' +
