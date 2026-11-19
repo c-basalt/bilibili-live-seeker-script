@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.7.19
+// @version      0.7.20
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -90,6 +90,7 @@
         'force-flv': true,
         'prevent-pause': false,
         'force-raw': false,
+        'hls-original': true,
         'auto-quality': true,
         'auto-speedup': true,
         'auto-slowdown': true,
@@ -248,6 +249,7 @@
     /** @param {HTMLVideoElement} v * @returns {number|null} */
     const getBufferlen = (v) => {
         try {
+            if (!v.buffered.length) return null; // 尚未开始缓冲
             const buffer_len = Number(v.buffered.end(v.buffered.length - 1) - v.currentTime);
             return (!Number.isNaN(buffer_len)) ? buffer_len : null;
         } catch (e) {
@@ -476,8 +478,183 @@
 
     /** @param {any} uid * @param {string} url */
     const isOriginalUrl = (uid, url) =>
-        url.match(/\/live_\d+(?:_bs)?_\d+(?:_[0-9a-f]{8})?\.flv/)
-        || url.match(new RegExp(`/live_${base36Encode(Number(uid))}_(?:[A-Za-z0-9]+_[a-z0-9]+|\\d+_[A-Za-z0-9]+_[0-9a-f]{8})\\.flv`));
+        url.match(/\/live_\d+(?:_bs)?_\d+(?:_[0-9a-f]{8})?(?:\.flv|\/index\.m3u8)/)
+        || url.match(new RegExp(`/live_${base36Encode(Number(uid))}_(?:[A-Za-z0-9]+_[a-z0-9]+|\\d+_[A-Za-z0-9]+_[0-9a-f]{8})(?:\\.flv|/index\\.m3u8)`));
+
+    // ----------------------- HLS 原画（play-gateway master） -----------------------
+    // 2026-11 起 getRoomPlayInfo 不再响应 qn=25000，但 play-gateway 的 master m3u8 在 qn=25000 时
+    // 仍会给出「原画真彩」(BILI-QN=25000) 的未二压 HLS fMP4 流，且不需要登录
+
+    /** @type {{ [room_id: string]: { ts: number, codecs: any[] } }} */
+    const hlsOriginalCache = {};
+
+    /** @param {number|string} room_id * @param {any} uid * @returns {any[]} codec 列表（可能为空） */
+    const getHlsOriginalCodecs = (room_id, uid) => {
+        const cached = hlsOriginalCache[room_id];
+        if (cached && Date.now() - cached.ts < 5 * 60 * 1000) return cached.codecs;
+        /** @type {any[]} */
+        const codecs = [];
+        try {
+            const request = new XMLHttpRequest();
+            request.open('GET', `https://api.live.bilibili.com/xlive/play-gateway/master/url?cid=${room_id}&mid=0&pt=web&p2p_type=-1&net=0&free_type=0&build=0&feature=2&qn=25000&drm_type=0&codec=0,1`, false);
+            request.send(null);
+            const text = request.status === 200 ? request.responseText : '';
+            if (!text.startsWith('#EXTM3U')) {
+                console.warn('[bililive-seeker] master m3u8 unavailable', request.status, text.slice(0, 100));
+            } else {
+                const lines = text.split('\n').map(l => l.trim());
+                /** @type {{ info: string, url: URL }[]} */
+                const variants = [];
+                lines.forEach((line, i) => {
+                    const next = lines[i + 1];
+                    if (line.startsWith('#EXT-X-STREAM-INF:') && next && !next.startsWith('#')) {
+                        variants.push({ info: line, url: new URL(next) });
+                    }
+                });
+                // 一般原画标为 BILI-QN=25000「原画真彩」；但主播推 HEVC 等情况下，
+                // 未二压的原画可能直接标为 BILI-QN=10000「原画」，此时按无后缀的原画文件名识别
+                let selected = variants.filter(v => /BILI-QN=25000\b/.test(v.info));
+                if (!selected.length) selected = variants.filter(v => isOriginalUrl(uid, v.url.pathname));
+                /** @type {{ [name: string]: any }} */
+                const byCodec = {};
+                selected.forEach(({ info: line, url }) => {
+                    const videoCodec = (line.match(/CODECS="([^",]+)/) || [])[1] || '';
+                    const name = videoCodec.startsWith('hvc1') || videoCodec.startsWith('hev1') ? 'hevc' : videoCodec.startsWith('av01') ? 'av1' : 'avc';
+                    if (!byCodec[name]) {
+                        byCodec[name] = {
+                            codec_name: name,
+                            current_qn: 25000,
+                            accept_qn: [25000],
+                            base_url: url.pathname + '?',
+                            url_info: [],
+                            hdr_qn: null,
+                            dolby_type: 0,
+                            attr_name: '',
+                            hdr_type: 0,
+                            drm: false,
+                            drm_key_systems: null,
+                            video_codecs: { base: videoCodec, ext: [''] },
+                            audio_codecs: { base: 'mp4a.40.2', ext: [''] },
+                            video_color_info: { colorspace: 'bt709', metadata_types: ['none'] },
+                        };
+                        codecs.push(byCodec[name]);
+                    }
+                    if (byCodec[name].base_url === url.pathname + '?') {
+                        byCodec[name].url_info.push({ host: url.origin, extra: url.search.slice(1), stream_ttl: 0 });
+                    }
+                });
+            }
+        } catch (e) {
+            console.error('[bililive-seeker] failed to get master m3u8\n', e);
+        }
+        console.debug('[bililive-seeker] hls original codecs', codecs);
+        hlsOriginalCache[room_id] = { ts: Date.now(), codecs };
+        return codecs;
+    }
+
+    /** 浏览器是否能解码该 codec；没有编码信息时视为可播放 @param {any} codec * @returns {boolean} */
+    const isCodecPlayable = (codec) => {
+        const base = codec?.video_codecs?.base;
+        if (!base) return true;
+        try {
+            const MS = W.MediaSource || W.ManagedMediaSource;
+            return !MS || MS.isTypeSupported(`video/mp4; codecs="${base}"`);
+        } catch (e) {
+            return true;
+        }
+    }
+
+    /**
+     * 播放器右键「切换解码策略」允许的编码（与播放器逻辑一致：[av1, hevc, avc].slice(选中项)，7 天后失效）
+     * @returns {string[]}
+     */
+    const getPlayerAllowedCodecs = () => {
+        const all = ['av1', 'hevc', 'avc'];
+        try {
+            const uid = (document.cookie.match(/(?:^|;\s*)DedeUserID=(\d+)/) || [])[1] || '0';
+            const config = JSON.parse(W.localStorage.getItem(`web-player-ui-config:${uid}`) || '{}');
+            const { val, ts } = config.selectedCodec || {};
+            if (!val || !all.includes(val) || Date.now() - Number(ts) > 6048e5) return all;
+            return all.slice(all.indexOf(val));
+        } catch (e) {
+            return all;
+        }
+    }
+
+    /**
+     * 播放器右键「切换解码策略」排除了原画编码（如锁定 AVC 而原画是 HEVC）时，需要保留 AVC 兜底，
+     * 否则播放器找不到流报 92006。不无条件保留：HLS 下有 AVC 时播放器会优先选 AVC 二压。
+     * @param {any[]} codecs
+     */
+    const needAvcFallback = (codecs) => {
+        if (codecs.some(codec => codec.codec_name === 'avc')) return false;
+        const allowed = getPlayerAllowedCodecs();
+        if (codecs.some(codec => allowed.includes(codec.codec_name))) return false;
+        console.warn('[bililive-seeker] player codec strategy excludes original codec, keep avc fallback', allowed);
+        return true;
+    }
+
+    /** @param {any} playurl * @returns {boolean} */
+    const hasPlayableCodec = (playurl) => playurl.stream.some(
+        stream => stream.format.some(format => format.codec.some(codec => isCodecPlayable(codec)))
+    );
+
+    /** @param {any} playurl * @param {any[]} codecs */
+    const injectHlsOriginal = (playurl, codecs) => {
+        // 合并原有 codec 的字段（session、media_info 等），并保留原有画质列表以便切换
+        const template = {};
+        playurl.stream.forEach(stream => stream.format.forEach(format => format.codec.forEach(codec => {
+            if (!template[codec.codec_name]) template[codec.codec_name] = codec;
+        })));
+        const merged = codecs.map(codec => {
+            const t = template[codec.codec_name] || template.avc || {};
+            const acceptQn = [25000, ...(t.accept_qn || []).filter(qn => qn !== 25000)];
+            return Object.assign({}, t, codec, { accept_qn: acceptQn, stream_resource_req: null });
+        });
+        // 原画不是 AVC 时，附上同协议（HLS fMP4）的 AVC 二压作为兜底，
+        // 以免播放器右键「切换解码策略」锁定 AVC 时找不到流（92006）
+        if (needAvcFallback(merged)) {
+            playurl.stream.forEach(stream => {
+                if (stream.protocol_name !== 'http_hls') return;
+                stream.format.forEach(format => {
+                    if (format.format_name !== 'fmp4') return;
+                    const avc = format.codec.find(codec => codec.codec_name === 'avc');
+                    if (avc && !merged.some(codec => codec.codec_name === 'avc')) merged.push(avc);
+                });
+            });
+        }
+        // 只保留 HLS fMP4 原画，并去掉 master_url，避免播放器无缝切换回二压流
+        playurl.stream = [{ protocol_name: 'http_hls', format: [{ format_name: 'fmp4', codec: merged }] }];
+    }
+
+    /** @param {any} playurl */
+    const ensureQn25000Desc = (playurl) => {
+        if (!playurl.g_qn_desc) return;
+        playurl.g_qn_desc = playurl.g_qn_desc.filter(desc => desc.qn !== 25000);
+        playurl.g_qn_desc.splice(0, 0, {
+            "qn": 25000,
+            "desc": "原画真彩",
+            "hdr_desc": "",
+            "attr_desc": null,
+            "hdr_type": 0,
+            "media_base_desc": {
+                "detail_desc": { "desc": "未二压的真原画" },
+                "brief_desc": { "desc": "原画", "badge": "真彩" }
+            },
+            "eotf": 0
+        });
+    }
+
+    /** @param {string|undefined} url * @returns {number|null} */
+    const getRequestedQn = (url) => {
+        try {
+            if (!url) return null;
+            const qn = new URL(url, location.href).searchParams.get('qn');
+            return qn === null ? null : Number(qn);
+        } catch (e) {
+            return null;
+        }
+    }
 
     /** @param {any} uid * @param {any} playurl */
     const containsOriginal = (uid, playurl) => playurl.stream.some(
@@ -502,11 +679,7 @@
             /** @type {HTMLElement|null} */
             const e = document.querySelector('#force-raw');
             if (e) {
-                if (!getStoredValue('playurl-' + room_id)) {
-                    e.style.cssText = 'filter: grayscale(1) brightness(1.5)';
-                } else {
-                    e.style.cssText = '';
-                }
+                e.closest('.sk-chip')?.classList.toggle('sk-unavailable', !getStoredValue('playurl-' + room_id));
             } else {
                 console.debug('[bililive-seeker] Failed to find force-raw element to update')
             }
@@ -514,10 +687,13 @@
     }
     const checkPlayurlIntervalId = setInterval(() => { expiredPlayurlChecker() }, 600 * 1000);
 
-    const interceptPlayurl = (r) => {
+    /** @param {any} r * @param {string} [reqUrl] 请求地址，用于判断请求的画质；初始数据没有地址 */
+    const interceptPlayurl = (r, reqUrl) => {
         let playurl = r.data?.playurl_info?.playurl;
+        let injectedHls = false;
         if (playurl?.stream) {
-            if (containsOriginal(r.data.uid, playurl)) {
+            const hasOriginal = containsOriginal(r.data.uid, playurl);
+            if (hasOriginal) {
                 console.debug('[bililive-seeker] caching raw stream url');
                 setStoredValue('playurl-' + playurl.cid, playurl);
             } else {
@@ -526,35 +702,52 @@
                         codec.accept_qn.splice(0, 0, 25000);
                     }
                 })));
-                if (!playurl.g_qn_desc.some(desc => desc.qn === 25000 && desc.media_base_desc)) {
-                    playurl.g_qn_desc.splice(1, 0, {
-                        "qn": 25000,
-                        "desc": "隐藏原画",
-                        "hdr_desc": "",
-                        "attr_desc": null,
-                        "hdr_type": 0,
-                        "media_base_desc": {
-                            "detail_desc": { "desc": "尝试获取原画" },
-                            "brief_desc": { "desc": "原画" }
-                        },
-                        "eotf": 0
-                    });
-                }
+                ensureQn25000Desc(playurl);
             }
             console.debug('[bililive-seeker] got playinfo', r);
+            let usedCache = false;
             if (isChecked('force-raw', true)) {
                 expiredPlayurlChecker();
                 const cachedUrl = getStoredValue('playurl-' + playurl.cid);
                 console.debug('[bililive-seeker] load cached url', cachedUrl);
-                if (cachedUrl) playurl = r.data.playurl_info.playurl = cachedUrl;
+                if (cachedUrl) {
+                    playurl = r.data.playurl_info.playurl = cachedUrl;
+                    usedCache = true;
+                }
             }
-            if (isChecked('force-flv', true)) {
+            // 优先级：响应自带的原画 / 缓存的原画 FLV > HLS 原画 > 二压
+            const requestedQn = getRequestedQn(reqUrl) ?? (isChecked('auto-quality', true) ? 25000 : 0);
+            if (!hasOriginal && !usedCache && requestedQn === 25000 && isChecked('hls-original', true)) {
+                const allCodecs = getHlsOriginalCodecs(playurl.cid || r.data.room_id, r.data.uid);
+                const codecs = allCodecs.filter(codec => isCodecPlayable(codec));
+                if (allCodecs.length && !codecs.length) {
+                    console.warn('[bililive-seeker] browser cannot decode hls original, skip', allCodecs.map(c => c.video_codecs.base));
+                }
+                if (codecs.length) {
+                    injectHlsOriginal(playurl, codecs);
+                    injectedHls = true;
+                    console.debug('[bililive-seeker] injected hls original', playurl.stream);
+                }
+            }
+            if (isChecked('force-flv', true) && !injectedHls) {
+                const unfilteredStream = JSON.parse(JSON.stringify(playurl.stream));
                 const filteredStream = playurl.stream.filter(i => i.protocol_name !== "http_hls");
-                if (filteredStream.length) playurl.stream = filteredStream;
+                if (filteredStream.length && hasPlayableCodec({ stream: filteredStream })) playurl.stream = filteredStream;
                 playurl.stream.forEach(stream => stream.format.forEach(format => {
-                    const filteredCodec = format.codec.filter(codec => isOriginalUrl(r.data.uid, codec.base_url));
-                    if (filteredCodec.length) format.codec = filteredCodec;
+                    // 只保留浏览器能解码的原画编码；原画不是 AVC 时保留 AVC 作为兜底，
+                    // 否则在播放器右键「切换解码策略」选了 AVC 时会因找不到流而报 92006
+                    const filteredCodec = format.codec.filter(codec => isOriginalUrl(r.data.uid, codec.base_url) && isCodecPlayable(codec));
+                    if (filteredCodec.length) {
+                        if (needAvcFallback(filteredCodec)) {
+                            filteredCodec.push(...format.codec.filter(codec => codec.codec_name === 'avc'));
+                        }
+                        format.codec = filteredCodec;
+                    }
                 }));
+                if (!hasPlayableCodec(playurl)) {
+                    console.warn('[bililive-seeker] force-flv left no playable codec, revert', playurl.stream);
+                    playurl.stream = unfilteredStream;
+                }
                 console.debug('[bililive-seeker] filter video formats', r.data?.playurl_info?.playurl?.stream);
             }
         }
@@ -591,7 +784,7 @@
                     // since this should only be GET request
                     console.debug('[bililive-seeker] modified roomPlayInfo fetch request', arguments);
                     const response = await origFetch.apply(this, arguments);
-                    const r = interceptPlayurl(await response.clone().json());
+                    const r = interceptPlayurl(await response.clone().json(), url);
                     console.debug('[bililive-seeker] modified roomPlayInfo fetch response', r);
                     return new Response(JSON.stringify(r), response);
                 } else if (url.match('api.live.bilibili.com/live/getRoundPlayVideo') && isChecked('block-roundplay', true)) {
@@ -648,7 +841,7 @@
                     if (this.responseURL.match('api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo') || this.responseURL.match(getStoredString('playinfo-custom-endpoint'))) {
                         const rsp = JSON.parse(xhrAccessor.get.call(this));
                         cacheRoomInit(rsp);
-                        return JSON.stringify(interceptPlayurl(rsp));
+                        return JSON.stringify(interceptPlayurl(rsp, this.responseURL));
                     }
                 } catch (e) {
                     console.error('[bililive-seeker] error from hooked xhr.responseText\n', e);
@@ -691,7 +884,7 @@
                     break;
                 }
             }
-        } else if (getStoredBoolean('force-flv') && player.getPlayerInfo().playurl.match('.m3u8')) {
+        } else if (getStoredBoolean('force-flv') && player.getPlayerInfo().playurl.match('.m3u8') && !isOriginalUrl(getUid(), player.getPlayerInfo().playurl)) {
             console.debug('[bililive-seeker] reload player to try getting flv format');
             player.reload();
         }
@@ -786,84 +979,131 @@
             node.appendChild(resetButtonWrapper);
             waitForQuery('#head-info-vm .header-right', _ => {
                 console.log('[bililive-seeker] Removing reset button');
-                document.querySelector('#reset-seeker-configs-fallback').parentElement.remove();
+                document.querySelector('#reset-seeker-configs-fallback')?.parentElement.remove();
             }, 180 * 1000);
         }, 3000);
     });
 
-    waitForQuery('#head-info-vm .header-right', node => {
+    // 面板作为 .header-center 的第一个子元素: .header-center 右对齐，面板在人气榜等模块左边，隐藏面板时右侧模块不会移动
+    const PANEL_MOUNT_QUERY = '#head-info-vm .header-center';
+    /** @param {HTMLElement} mount * @param {HTMLElement} panel */
+    const mountControlPanel = (mount, panel) => {
+        panel.style.margin = '0 4px 0 8px';
+        mount.insertBefore(panel, mount.firstChild);
+    };
+
+    waitForQuery(PANEL_MOUNT_QUERY, node => {
         const controlPanel = document.createElement("span");
+        const BR = '&#13;&#10;';
         controlPanel.innerHTML = (
-            '<span id="basic-settings-page">' +
-            '  <span title="重新从当前的位置开始播放直播来重置音视频的同步，以应对音视频的不同步  &#13;&#10;重置时会有一瞬的卡顿  &#13;&#10;勾选后自动每隔一段时间执行一次重置，重置间隔可以在高级选项中设置">' +
-            '<button id="reset-AV-sync" type="button" style="width:7em">重置音画同步</button><input type="checkbox" id="auto-AV-sync">' +
-            '  </span><span title="隐藏播放器右键菜单中的“视频统计信息”悬浮窗  &#13;&#10;悬浮窗未开启时会自动取消勾选">' +
-            '<label for="hide-stats">隐藏统计</label><input type="checkbox" id="hide-stats">' +
-            '  </span><span title="当检测到播放器暂停，且缓冲长度超过“追帧秒数”时，自动恢复播放器播放">' +
-            '<label for="prevent-pause">避免暂停</label><input type="checkbox" id="prevent-pause">' +
-            '  </span><span title="直播状态下，检测到错误时自动刷新页面  &#13;&#10;或在下播状态下，弹幕服务器疑似断连时，自动刷新页面  &#13;&#10;刷新页面前文字会变为橙色">' +
-            '<label for="auto-reload">自动刷新</label><input type="checkbox" id="auto-reload">' +
-            '  </span>' +
-            '<br>' +
-            '  <span title="尝试去除视频流中的HLS流，让播放器优先使用FLV协议，&#13;&#10并在检测到原画时只保留原画对应的编码类型，以降低延迟">' +
-            '<label for="force-flv">强制flv+原编码</label><input type="checkbox" id="force-flv">' +
-            '  </span><span title="当获取的直播视频流为延迟更高的二压视频时，尝试替换为保存的原画流，以降低延迟  &#13;&#10;当前直播间没有保存原画流/原画流已过期时，选择框为灰色  &#13;&#10;主播网络卡顿/重开推流后可能出现一直重复最后几秒的情况，需取消该选项后切换一次画质或刷新">' +
-            '<label for="force-raw">强制原画</label><input type="checkbox" id="force-raw" style="filter: grayscale(1) brightness(1.5)">' +
-            '  </span><span title="进入直播间时自动切换右下角的“原画”画质。和手动切换效果相同">' +
-            '<label for="auto-quality">自动原画</label><input type="checkbox" id="auto-quality">' +
-            '  </span><span title="阻止直播间进行轮播">' +
-            '<label for="block-roundplay">阻止轮播</label><input type="checkbox" id="block-roundplay">' +
-            '  </span>' +
-            '<br>' +
-            '  <span title="跳转至非活动页面的常规直播间">' +
-            '<a id="go-to-blanc-room" style="display: none; text-align: center; width: 7.5em" target="_parent">转至常规直播间</a>' +
-            '  </span>' +
-            '<button id="go-to-adv-settings" type="button" style="width: 7em">转到高级选项</button>' +
-            '  <span title="本地播放器追帧的目标缓冲长度，单位为秒（播放器缓冲的长度1：1等于播放器产生的延迟）  &#13;&#10;过小容易导致卡顿甚至丢失原画的连接  &#13;&#10;需根据自己的网络情况选择合适的值  &#13;&#10;可在高级选项中关闭追帧">' +
-            '<label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" step="0.1" style="width: 3.5em">' +
-            '  </span>' +
+            '<span id="basic-settings-page" class="sk-page">' +
+            '<span class="sk-row">' +
+            '<span class="sk-group" title="重新从当前的位置开始播放直播来重置音视频的同步，以应对音视频的不同步' + BR + '重置时会有一瞬的卡顿' + BR + '勾选“定时”后自动每隔一段时间执行一次重置，重置间隔可以在高级选项中设置">' +
+            '<button id="reset-AV-sync" type="button" class="sk-btn">重置音画同步</button>' +
+            '<span class="sk-chip"><input type="checkbox" id="auto-AV-sync"><label for="auto-AV-sync">定时</label></span>' +
+            '</span>' +
+            '<span class="sk-chip" title="隐藏播放器右键菜单中的“视频统计信息”悬浮窗' + BR + '悬浮窗未开启时会自动取消勾选"><input type="checkbox" id="hide-stats"><label for="hide-stats">隐藏统计</label></span>' +
+            '<span class="sk-chip" title="当检测到播放器暂停，且缓冲长度超过“追帧秒数”时，自动恢复播放器播放"><input type="checkbox" id="prevent-pause"><label for="prevent-pause">避免暂停</label></span>' +
+            '<span class="sk-chip" title="直播状态下，检测到错误时自动刷新页面' + BR + '或在下播状态下，弹幕服务器疑似断连时，自动刷新页面' + BR + '刷新页面前文字会变为橙色"><input type="checkbox" id="auto-reload"><label for="auto-reload">自动刷新</label></span>' +
+            '<span class="sk-field" title="本地播放器追帧的目标缓冲长度，单位为秒（播放器缓冲的长度1：1等于播放器产生的延迟）' + BR + '过小容易导致卡顿甚至丢失原画的连接' + BR + '需根据自己的网络情况选择合适的值' + BR + '可在高级选项中关闭追帧"><label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" step="0.1"></span>' +
+            '</span>' +
+            '<span class="sk-row">' +
+            '<a id="go-to-blanc-room" class="sk-btn" style="display: none" target="_parent" title="跳转至非活动页面的常规直播间">转至常规直播间</a>' +
+            '<span class="sk-chip" title="尝试去除视频流中的HLS流，让播放器优先使用FLV协议，' + BR + '并在检测到原画时只保留原画对应的编码类型，以降低延迟"><input type="checkbox" id="force-flv"><label for="force-flv">强制flv+原编码</label></span>' +
+            '<span class="sk-chip sk-unavailable" title="当获取的直播视频流为延迟更高的二压视频时，尝试替换为保存的原画流，以降低延迟' + BR + '当前直播间没有保存原画流/原画流已过期时，选项为虚线灰色' + BR + '主播网络卡顿/重开推流后可能出现一直重复最后几秒的情况，需取消该选项后切换一次画质或刷新"><input type="checkbox" id="force-raw"><label for="force-raw">强制原画</label></span>' +
+            '<span class="sk-chip" title="进入直播间时自动切换右下角的“原画”画质。和手动切换效果相同"><input type="checkbox" id="auto-quality"><label for="auto-quality">自动原画</label></span>' +
+            '<span class="sk-chip" title="阻止直播间进行轮播"><input type="checkbox" id="block-roundplay"><label for="block-roundplay">阻止轮播</label></span>' +
+            '<span class="sk-chip" title="选择“原画真彩”画质且没有可用的原画FLV时，改用play-gateway提供的未二压HLS(fMP4)原画流' + BR + '画质高于二压的“原画”，但HLS协议的延迟可能与二压FLV不同，可自行对比取舍"><input type="checkbox" id="hls-original"><label for="hls-original">HLS原画</label></span>' +
+            '<button id="go-to-adv-settings" type="button" class="sk-btn sk-nav" title="转到高级选项">高级 ›</button>' +
+            '</span>' +
             '</span>' +
 
-            '<span id="adv-settings-page" style="display:none">' +
-            '  <span title="清空重置追帧脚本的所有配置（包括缓存的原画链接）并立刻刷新页面">' +
-            '<button id="reset-seeker-configs" style="width: 5em">重置配置</button>' +
-            '  </span><span title="复制当前直播间保存的原画流链接到剪贴板，可用于“设置连接”">' +
-            '<button id="copy-playurl" type="button" style="width: 7em">复制推流链接</button>' +
-            '  </span><span title="手动设置当前直播间保存的原画流链接，用于“强制原画”选项让播放器加载延迟更低的原画流  &#13;&#10;错误的配置可能导致无法正常观看直播！">' +
-            '<button id="set-playurl" type="button">设置链接!</button>' +
-            '  </span><span title="设置获取视频流链接的API，详见说明中的链接  &#13;&#10;使用后可能无法观看各种限定直播！  &#13;&#10;错误的配置可能导致无法正常观看直播！">' +
-            '<button id="set-endpoint" type="button" style="width: 8em">设置视频流API !</button>' +
-            '  </span>' +
-            '<br>' +
-            '  <span title="设置缓冲时长超过追帧秒数时，缓冲长度和追帧秒数的差值的各级阶梯阈值，以及各级阶梯要加快到的播放速度  &#13;&#10;错误的配置可能导致播放不正常！">' +
-            '<button id="set-speedup-thres" type="button" style="width: 7.5em">设置加速阈值!</button>' +
-            '  </span><span title="取消勾选后将不会在缓冲时长超过追帧秒数时自动加速追帧">' +
-            '<label for="auto-speedup">追帧加速</label><input type="checkbox" id="auto-speedup" checked>' +
-            '  </span>' +
-            '  <span title="设置缓冲时长极低时，降低播放速度的各级阶梯的缓冲时长阈值，以及各级阶梯要降低到的播放速度  &#13;&#10;错误的配置可能导致播放不正常！">' +
-            '<button id="set-slowdown-thres" type="button" style="width: 7.5em">设置减速阈值!</button>' +
-            '  </span><span title="取消勾选后将不会在缓冲时长降低至减速阈值后自动降低播放速度">' +
-            '<label for="auto-slowdown">自动减速</label><input type="checkbox" id="auto-slowdown" checked>' +
-            '  </span>' +
-            '<br>' +
-            '<button id="go-to-basic-settings" type="button" style="width: 7em">转到基础选项</button>' +
-            '  <span title="重置音画同步时，重新开始位置相对现在的秒数  &#13;&#10;合适的值可以减轻重置时的卡顿感">' +
-            '<label for="AV-resync-step">音画同步重置步进</label><input type="number" id="AV-resync-step" step="0.01" style="width: 3.5em">' +
-            '  </span><span title="勾选“重置音画同步”后，自动进行音画同步重置的间隔时长，单位为秒">' +
-            '<label for="AV-resync-interval">间隔</label><input type="number" id="AV-resync-interval" step="1" min="1" style="width: 3.5em">' +
-            '  </span>' +
+            '<span id="adv-settings-page" class="sk-page" style="display:none">' +
+            '<span class="sk-row">' +
+            '<button id="reset-seeker-configs" type="button" class="sk-btn sk-warn" title="清空重置追帧脚本的所有配置（包括缓存的原画链接）并立刻刷新页面">重置配置</button>' +
+            '<button id="copy-playurl" type="button" class="sk-btn" title="复制当前直播间保存的原画流链接到剪贴板，可用于“设置链接”">复制推流链接</button>' +
+            '<button id="set-playurl" type="button" class="sk-btn sk-warn" title="手动设置当前直播间保存的原画流链接，用于“强制原画”选项让播放器加载延迟更低的原画流' + BR + '错误的配置可能导致无法正常观看直播！">设置链接</button>' +
+            '<button id="set-endpoint" type="button" class="sk-btn sk-warn" title="设置获取视频流链接的API，详见说明中的链接' + BR + '使用后可能无法观看各种限定直播！' + BR + '错误的配置可能导致无法正常观看直播！">设置视频流API</button>' +
+            '<button id="go-to-basic-settings" type="button" class="sk-btn sk-nav" title="返回基础选项">‹ 返回</button>' +
+            '</span>' +
+            '<span class="sk-row">' +
+            '<span class="sk-group" title="设置缓冲时长超过追帧秒数时，缓冲长度和追帧秒数的差值的各级阶梯阈值，以及各级阶梯要加快到的播放速度' + BR + '错误的配置可能导致播放不正常！' + BR + '取消勾选“追帧加速”后将不会在缓冲时长超过追帧秒数时自动加速追帧">' +
+            '<button id="set-speedup-thres" type="button" class="sk-btn sk-warn">加速阈值</button>' +
+            '<span class="sk-chip"><input type="checkbox" id="auto-speedup" checked><label for="auto-speedup">追帧加速</label></span>' +
+            '</span>' +
+            '<span class="sk-group" title="设置缓冲时长极低时，降低播放速度的各级阶梯的缓冲时长阈值，以及各级阶梯要降低到的播放速度' + BR + '错误的配置可能导致播放不正常！' + BR + '取消勾选“自动减速”后将不会在缓冲时长降低至减速阈值后自动降低播放速度">' +
+            '<button id="set-slowdown-thres" type="button" class="sk-btn sk-warn">减速阈值</button>' +
+            '<span class="sk-chip"><input type="checkbox" id="auto-slowdown" checked><label for="auto-slowdown">自动减速</label></span>' +
+            '</span>' +
+            '<span class="sk-field" title="重置音画同步时，重新开始位置相对现在的秒数' + BR + '合适的值可以减轻重置时的卡顿感"><label for="AV-resync-step">重置步进</label><input type="number" id="AV-resync-step" step="0.01"></span>' +
+            '<span class="sk-field" title="勾选“重置音画同步”的“定时”后，自动进行音画同步重置的间隔时长，单位为秒"><label for="AV-resync-interval">间隔</label><input type="number" id="AV-resync-interval" step="1" min="1"></span>' +
+            '</span>' +
             '</span>' +
 
-            '<style>#seeker-control-panel button, #seeker-control-panel a { width:5.5em; padding:0px; background: transparent; border: 1.5px solid #999; border-radius: 4px; color: #999; filter: contrast(0.6); }' +
-            '#seeker-control-panel input[type="number"] { border: 1.5px solid #999; border-radius: 2px; height: 11px }' +
-            '#seeker-control-panel input[type="checkbox"] { height: 12px }' +
-            '#seeker-control-panel button:hover, #seeker-control-panel a:hover { filter: none; } #seeker-control-panel button:active { filter: none; transform: translate(0.3px, 0.3px); }' +
-            '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.6);} #seeker-control-panel input { vertical-align: middle; margin:1px; }' +
-            '#seeker-control-panel label.danmaku-lost, #seeker-control-panel label.live-on, #seeker-control-panel label.video-error, #seeker-control-panel label.reload { color: orange!important; filter: none; }</style>'
+            '<style>' +
+            '#seeker-control-panel { --sk-accent: #0b85c8; --sk-warn: #f0a020; --sk-line: color-mix(in srgb, currentColor 26%, transparent); --sk-line-hover: color-mix(in srgb, currentColor 55%, transparent); --sk-fill: color-mix(in srgb, currentColor 7%, transparent); display: flex; flex-direction: column; justify-content: center; font-size: 11px; line-height: 1; }' +
+            '#head-info-vm .header-center:has(> #seeker-control-panel) { justify-content: safe flex-end; flex: 1 1 0; min-width: 0; }' +
+            '#seeker-control-panel.sk-floating { position: fixed; inset: auto; margin: 0 !important; padding: 10px 12px; width: max-content; height: auto; overflow: visible; border: 1px solid rgba(255, 255, 255, .1); border-radius: 12px; background: rgba(28, 29, 33, .96); color: #e8e8e8 !important; box-shadow: 0 10px 30px rgba(0, 0, 0, .35); z-index: 2147483000; }' +
+            '#seeker-control-panel.sk-floating:not(.sk-open) { display: none !important; }' +
+            '#seeker-control-panel.sk-floating :is(label, .sk-btn) { color: #e8e8e8 !important; }' +
+            ':where(#control-panel-showhide) { appearance: none; background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }' +
+            '#seeker-control-panel .sk-page { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }' +
+            '#seeker-control-panel .sk-row { display: flex; flex-wrap: nowrap; justify-content: flex-end; align-items: center; gap: 4px; }' +
+            '#seeker-control-panel .sk-group { display: inline-flex; }' +
+            '#seeker-control-panel .sk-group > :first-child { border-start-end-radius: 0; border-end-end-radius: 0; }' +
+            '#seeker-control-panel .sk-group > :last-child { border-start-start-radius: 0; border-end-start-radius: 0; margin-inline-start: -1px; }' +
+            '#seeker-control-panel :is(.sk-chip, .sk-btn, .sk-field) { box-sizing: border-box; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border: 1px solid var(--sk-line); border-radius: 10px; color: inherit; background: transparent; font: inherit; white-space: nowrap; text-decoration: none; transition: border-color .15s, background-color .15s, color .15s; }' +
+            '#seeker-control-panel :is(.sk-chip, .sk-btn) { cursor: pointer; }' +
+            '#seeker-control-panel :is(.sk-chip, .sk-btn, .sk-field):hover { border-color: var(--sk-line-hover); }' +
+            '#seeker-control-panel .sk-btn { background: var(--sk-fill); }' +
+            '#seeker-control-panel .sk-btn:active { transform: translateY(0.5px); }' +
+            '#seeker-control-panel .sk-btn:focus-visible, #seeker-control-panel .sk-field input:focus-visible { outline: 2px solid var(--sk-accent); outline-offset: 1px; }' +
+            '#seeker-control-panel .sk-nav { padding: 0 9px; }' +
+            '#seeker-control-panel .sk-warn { border-color: color-mix(in srgb, var(--sk-warn) 55%, transparent); }' +
+            '#seeker-control-panel .sk-warn:hover { border-color: var(--sk-warn); color: var(--sk-warn) !important; }' +
+            '#seeker-control-panel label { margin: 0; color: inherit; cursor: inherit; }' +
+            '#seeker-control-panel .sk-chip { padding-inline-start: 5px; }' +
+            '#seeker-control-panel .sk-chip input { appearance: none; box-sizing: border-box; display: inline-grid; place-content: center; flex: none; width: 11px; height: 11px; margin: 0; border: 1.5px solid color-mix(in srgb, currentColor 55%, transparent); border-radius: 50%; cursor: pointer; }' +
+            '#seeker-control-panel .sk-chip input::before { content: ""; width: 7px; height: 7px; background: currentColor; mask: url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'black\' stroke-width=\'4\' stroke-linecap=\'round\' stroke-linejoin=\'round\'><polyline points=\'20 6 9 17 4 12\'/></svg>") no-repeat center / contain; scale: 0; transition: scale .15s ease; }' +
+            '#seeker-control-panel .sk-chip input:focus-visible { outline: 2px solid var(--sk-accent); outline-offset: 2px; }' +
+            '#seeker-control-panel .sk-chip:has(input:checked) { background: var(--sk-accent); border-color: var(--sk-accent); color: #fff !important; }' +
+            '#seeker-control-panel .sk-chip:has(input:checked) label { color: #fff !important; }' +
+            '#seeker-control-panel .sk-chip input:checked { border-color: #fff; background: #fff; color: var(--sk-accent); }' +
+            '#seeker-control-panel .sk-chip input:checked::before { scale: 1; }' +
+            '#seeker-control-panel .sk-chip.sk-unavailable { border-style: dashed; opacity: .5; }' +
+            '#seeker-control-panel .sk-chip.sk-unavailable:has(input:checked) { background: transparent; border-color: var(--sk-accent); color: inherit !important; }' +
+            '#seeker-control-panel .sk-chip.sk-unavailable:has(input:checked) label { color: inherit !important; }' +
+            '#seeker-control-panel .sk-chip.sk-unavailable input:checked { border-color: var(--sk-accent); background: var(--sk-accent); color: #fff; }' +
+            '#seeker-control-panel .sk-field { padding-inline-end: 3px; }' +
+            '#seeker-control-panel .sk-field input::-webkit-inner-spin-button, #seeker-control-panel .sk-field input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }' +
+            '#seeker-control-panel .sk-field input { appearance: textfield; box-sizing: border-box; width: 3.6em; height: 14px; padding: 0 2px; border: none; border-radius: 7px; background: var(--sk-fill); color: inherit; font: inherit; text-align: center; }' +
+            '#seeker-control-panel .sk-chip.sk-chip:has(label:is(.danmaku-lost, .live-on, .video-error, .reload)) { border-color: var(--sk-warn); background: var(--sk-warn); }' +
+            '#seeker-control-panel .sk-chip label:is(.danmaku-lost, .live-on, .video-error, .reload) { color: #fff !important; }' +
+            '#seeker-control-panel .sk-chip.sk-chip:has(label:is(.danmaku-lost, .live-on, .video-error, .reload)):not(:has(input:checked)) label { color: var(--sk-warn) !important; }' +
+            '@media (max-width: 1440px) { #seeker-control-panel .sk-row { gap: 3px; } #seeker-control-panel :is(.sk-chip, .sk-btn, .sk-field) { padding: 0 6px; } #seeker-control-panel .sk-chip { padding-inline-start: 4px; } #seeker-control-panel .sk-field { padding-inline-end: 3px; } }' +
+            '@media (prefers-reduced-motion: reduce) { #seeker-control-panel * { transition: none !important; } }' +
+            '</style>'
         );
-        controlPanel.style.cssText = 'text-align: right; flex: 0 0 fit-content; font-size: 11px; z-index: 999;';
+        controlPanel.style.cssText = 'flex: 0 0 auto; z-index: 999;';
+        controlPanel.classList.add('live-skin-normal-a-text');
         controlPanel.id = 'seeker-control-panel';
-        node.appendChild(controlPanel);
+        mountControlPanel(node, controlPanel);
+        controlPanel.addEventListener('beforetoggle', (/** @type {any} */ ev) => {
+            if (ev.newState === 'open') positionFloatingPanel(controlPanel);
+            controlPanel.classList.toggle('sk-open', ev.newState === 'open');
+        });
+        document.addEventListener('pointerdown', ev => {
+            if (supportsPopover || !panelFloating || !controlPanel.classList.contains('sk-open')) return;
+            const btn = document.querySelector('#control-panel-showhide');
+            const t = /** @type {Node} */ (ev.target);
+            if (!controlPanel.contains(t) && !btn?.contains(t)) controlPanel.classList.remove('sk-open');
+        });
+        // 页面组件重新渲染时可能移除面板，检测到后重新挂载
+        setInterval(() => {
+            if (controlPanel.isConnected) return;
+            const mount = document.querySelector(PANEL_MOUNT_QUERY);
+            if (mount) mountControlPanel(mount, controlPanel);
+        }, 2000);
 
         queryAllElements('label, button, a', controlPanel).forEach(node => {
             node.classList.add('live-skin-normal-a-text');
@@ -1090,7 +1330,7 @@
         if (W.self !== W.top) {
             waitForQuery('a#go-to-blanc-room', _node => {
                 const node = /** @type {HTMLAnchorElement} */ (_node);
-                node.style.display = "inline-block";
+                node.style.display = "";
                 node.href = location.href;
             });
         }
@@ -1101,7 +1341,68 @@
     // ----------------------- 显示折叠UI -----------------------
 
 
+    // 头部空间不足以横排显示面板时，改为点击「追帧设置」弹出的浮层
+    const supportsPopover = typeof HTMLElement.prototype.showPopover === 'function';
+    let panelFloating = false;
+
+    /** @param {HTMLElement} panel */
+    const positionFloatingPanel = (panel) => {
+        const head = document.querySelector('#head-info-vm');
+        if (!head) return;
+        const r = head.getBoundingClientRect();
+        panel.style.top = Math.round(r.bottom + 6) + 'px';
+        panel.style.right = Math.max(8, Math.round(window.innerWidth - r.right + 8)) + 'px';
+        panel.style.left = 'auto';
+    };
+
+    /** @param {HTMLElement} panel * @param {boolean} on */
+    const setPanelFloating = (panel, on) => {
+        if (panelFloating === on) return;
+        panelFloating = on;
+        const btn = /** @type {HTMLButtonElement|null} */ (document.querySelector('#control-panel-showhide'));
+        panel.classList.toggle('sk-floating', on);
+        if (on) {
+            panel.classList.remove('sk-open');
+            if (supportsPopover) {
+                panel.popover = 'auto';
+                if (btn) btn.popoverTargetElement = panel;
+            }
+        } else {
+            if (supportsPopover) {
+                if (panel.matches(':popover-open')) panel.hidePopover();
+                panel.removeAttribute('popover');
+                if (btn) btn.popoverTargetElement = null;
+            }
+            panel.classList.remove('sk-open');
+            panel.style.top = panel.style.right = panel.style.left = '';
+        }
+        updatePanelHideState();
+    };
+
+    const updatePanelLayout = () => {
+        const panel = /** @type {HTMLElement|null} */ (document.querySelector('#seeker-control-panel'));
+        const host = panel?.parentElement;
+        if (!panel || !host) return;
+        if (!host.classList.contains('header-center')) { setPanelFloating(panel, false); return; }
+        const rows = queryAllElements('.sk-page', panel).filter(p => p.style.display !== 'none').flatMap(p => queryAllElements('.sk-row', p));
+        const measured = Math.max(0, ...rows.map(r => r.scrollWidth));
+        if (measured > 0) panel.dataset.needWidth = String(measured + 12);
+        const need = Number(panel.dataset.needWidth || 0);
+        if (!need) return; // 面板隐藏中且从未测量过
+        const others = queryAllElements(':scope > *', host).filter(e => e !== panel).reduce((sum, e) => sum + e.getBoundingClientRect().width + 4, 0);
+        const avail = host.clientWidth - others;
+        if (!panelFloating && need > avail) setPanelFloating(panel, true);
+        else if (panelFloating && need <= avail - 8) setPanelFloating(panel, false);
+    };
+    setInterval(updatePanelLayout, 1000);
+    window.addEventListener('resize', () => updatePanelLayout());
+
     const updatePanelHideState = () => {
+        if (panelFloating) {
+            waitForQuery('#seeker-control-panel', node => { node.style.display = ''; });
+            waitForQuery('#control-panel-showhide span', node => { node.innerText = '追帧设置'; });
+            return;
+        }
         if (getStoredBoolean('hide-seeker-control-panel')) {
             waitForQuery('#seeker-control-panel', node => { node.style.display = 'none'; });
             waitForQuery('#control-panel-showhide span', node => { node.innerText = '显示追帧'; });
@@ -1111,18 +1412,40 @@
         }
     }
 
-    waitForQuery('#head-info-vm .header-right .more-setting', node => {
-        const e = document.createElement('span');
+    const SHOWHIDE_MOUNT_QUERY = '#head-info-vm .header-right .more-setting';
+    /** @param {HTMLElement} mount * @param {HTMLElement} wrapper */
+    const mountShowHideButton = (mount, wrapper) => {
+        mount.insertBefore(wrapper, mount.children[0]);
+        mount.style.cssText = 'display: flex; flex-direction: row; gap: 3px';
+    };
+
+    waitForQuery(SHOWHIDE_MOUNT_QUERY, node => {
+        const wrapper = document.createElement('span');
         const scope = parseStyleScope(node.querySelector('.more-entry.live-skin-normal-a-text'));
-        e.innerHTML = `<div ${scope} id="control-panel-showhide" class="more-entry live-skin-normal-a-text pointer">
+        wrapper.innerHTML = `<button type="button" ${scope} id="control-panel-showhide" class="more-entry live-skin-normal-a-text pointer">
             <i ${scope} class="v-middle icon-font icon-danmu-a" style="height: 18px; opacity: 0.6; transform: translateY(2px);"></i>
-            <span ${scope} class="more-text v-middle"></span></div>`;
+            <span ${scope} class="more-text v-middle"></span></button>`;
+        const e = /** @type {HTMLButtonElement} */ (wrapper.firstElementChild);
         e.onclick = () => {
+            if (panelFloating) {
+                // 支持 popover 时由 popoverTargetElement 原生切换；否则手动切换
+                if (!supportsPopover) {
+                    const panel = document.querySelector('#seeker-control-panel');
+                    if (panel) { positionFloatingPanel(panel); panel.classList.toggle('sk-open'); }
+                }
+                return;
+            }
             setStoredValue('hide-seeker-control-panel', !getStoredBoolean('hide-seeker-control-panel'));
             updatePanelHideState();
+            setTimeout(updatePanelLayout, 50);
         }
-        node.insertBefore(e, node.children[0]);
-        node.style.cssText = 'display: flex; flex-direction: row; gap: 3px';
+        if (panelFloating && supportsPopover) e.popoverTargetElement = document.querySelector('#seeker-control-panel');
+        mountShowHideButton(node, wrapper);
+        setInterval(() => {
+            if (wrapper.isConnected) return;
+            const mount = document.querySelector(SHOWHIDE_MOUNT_QUERY);
+            if (mount) mountShowHideButton(mount, wrapper);
+        }, 2000);
         updatePanelHideState();
     }, 180 * 1000);
 
