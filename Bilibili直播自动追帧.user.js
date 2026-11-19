@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili直播自动追帧
 // @namespace    https://space.bilibili.com/521676
-// @version      0.7.18
+// @version      0.7.19
 // @description  自动追帧bilibili直播至设定的buffer length
 // @author       c_b
 // @match        https://live.bilibili.com/*
@@ -221,22 +221,13 @@
     const updatePlaybackRateDisplay = (playback_rate) => {
         const usernameRate = document.querySelector('#playback-rate-username');
         if (!usernameRate) {
-            const e = document.querySelector('.room-owner-username');
+            const e = document.querySelector('.anchor-username');
             if (e) {
                 e.style.lineHeight = 'normal';
                 e.innerHTML = e.innerHTML.match(/^([^<]+)(<|$)/)[1] + '<span id="playback-rate-username">　@' + playback_rate + '</span>'
             }
         } else {
             usernameRate.innerText = '　@' + playback_rate;
-        }
-        const titleRate = document.querySelector('#playback-rate-title');
-        if (!titleRate) {
-            const e2 = document.querySelector('.live-title .text');
-            if (e2) {
-                e2.innerHTML = e2.innerHTML.match(/^([^<]+)(<|$)/)[1] + '<br><span id="playback-rate-title" style="position: absolute; display:none">@' + playback_rate + '</span>'
-            }
-        } else {
-            titleRate.innerText = '@' + playback_rate;
         }
     }
 
@@ -749,24 +740,28 @@
 
     // ----------------------- 选项UI -----------------------
 
-    /** @param {() => HTMLElement|null} checker * @param {(node: HTMLElement) => void} exec * @param {number} [timeout] */
-    const waitForElement = (checker, exec, timeout) => {
-        const node = checker();
-        if (node) {
-            exec(node);
-        } else {
-            if (timeout !== undefined) {
-                timeout -= 100;
-                if (timeout > 0) setTimeout(() => waitForElement(checker, exec, timeout), 100);
-            } else {
-                setTimeout(() => waitForElement(checker, exec), 100);
-            }
+    /** @param {() => HTMLElement|null} checker * @param {number} timeout */
+    const waitForElement = async (checker, timeout) => {
+        while (timeout > 0) {
+            const node = checker();
+            if (node) return node;
+            await asyncSleep(100);
+            timeout -= 100;
         }
+        throw new Error("element not found");
     }
 
     /** @param {string} query * @param {(node: HTMLElement) => void} exec * @param {number} timeout=10000 */
     const waitForQuery = (query, exec, timeout = 10000) => {
-        waitForElement(() => document.querySelector(query), exec, timeout)
+        waitForElement(() => document.querySelector(query), timeout).then(exec).catch(() => {
+            console.error(`[bililive-seeker] Failed to find element "${query}" timeout=${timeout}ms`);
+        })
+    }
+
+    /** @param {HTMLElement|Element|null} node */
+    const parseStyleScope = (node) => {
+        if (!node) return '';
+        return Array.prototype.slice.call(node.attributes).map(i => i.nodeName).filter(i => i.match(/^data-/)).join(' ');
     }
 
     /** @param {string} query * @param {Document|HTMLElement} root * @returns {HTMLElement[]} */
@@ -776,7 +771,7 @@
 
     waitForQuery('#head-info-vm', node => {
         setTimeout(() => {
-            if (document.querySelector('#head-info-vm .lower-row')) {
+            if (document.querySelector('#head-info-vm .header-right')) {
                 console.debug('[bililive-seeker] Page is loaded, will not add reset button');
                 return;
             }
@@ -789,14 +784,14 @@
             resetButtonWrapper.style.cssText = 'position: absolute; right: 25px; top: 15px';
             resetButtonWrapper.children[0].onclick = _ => { clearStoredValues(); location.reload() };
             node.appendChild(resetButtonWrapper);
-            waitForQuery('#head-info-vm .lower-row', _ => {
+            waitForQuery('#head-info-vm .header-right', _ => {
                 console.log('[bililive-seeker] Removing reset button');
                 document.querySelector('#reset-seeker-configs-fallback').parentElement.remove();
             }, 180 * 1000);
         }, 3000);
     });
 
-    waitForQuery('#head-info-vm .normal-row-ctnr', node => {
+    waitForQuery('#head-info-vm .header-right', node => {
         const controlPanel = document.createElement("span");
         controlPanel.innerHTML = (
             '<span id="basic-settings-page">' +
@@ -825,7 +820,7 @@
             '  </span>' +
             '<button id="go-to-adv-settings" type="button" style="width: 7em">转到高级选项</button>' +
             '  <span title="本地播放器追帧的目标缓冲长度，单位为秒（播放器缓冲的长度1：1等于播放器产生的延迟）  &#13;&#10;过小容易导致卡顿甚至丢失原画的连接  &#13;&#10;需根据自己的网络情况选择合适的值  &#13;&#10;可在高级选项中关闭追帧">' +
-            '<label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" step="0.1" style="width: 3em;">' +
+            '<label for="buffer-threshold">追帧秒数</label><input type="number" id="buffer-threshold" step="0.1" style="width: 3.5em">' +
             '  </span>' +
             '</span>' +
 
@@ -853,14 +848,15 @@
             '<br>' +
             '<button id="go-to-basic-settings" type="button" style="width: 7em">转到基础选项</button>' +
             '  <span title="重置音画同步时，重新开始位置相对现在的秒数  &#13;&#10;合适的值可以减轻重置时的卡顿感">' +
-            '<label for="AV-resync-step">音画同步重置步进</label><input type="number" id="AV-resync-step" step="0.01" style="width: 3.5em;">' +
+            '<label for="AV-resync-step">音画同步重置步进</label><input type="number" id="AV-resync-step" step="0.01" style="width: 3.5em">' +
             '  </span><span title="勾选“重置音画同步”后，自动进行音画同步重置的间隔时长，单位为秒">' +
-            '<label for="AV-resync-interval">间隔</label><input type="number" id="AV-resync-interval" step="1" min="1" style="width: 3.5em;">' +
+            '<label for="AV-resync-interval">间隔</label><input type="number" id="AV-resync-interval" step="1" min="1" style="width: 3.5em">' +
             '  </span>' +
             '</span>' +
 
             '<style>#seeker-control-panel button, #seeker-control-panel a { width:5.5em; padding:0px; background: transparent; border: 1.5px solid #999; border-radius: 4px; color: #999; filter: contrast(0.6); }' +
-            '#seeker-control-panel input[type="number"] { border: 1.5px solid #999; border-radius: 2px; }' +
+            '#seeker-control-panel input[type="number"] { border: 1.5px solid #999; border-radius: 2px; height: 11px }' +
+            '#seeker-control-panel input[type="checkbox"] { height: 12px }' +
             '#seeker-control-panel button:hover, #seeker-control-panel a:hover { filter: none; } #seeker-control-panel button:active { filter: none; transform: translate(0.3px, 0.3px); }' +
             '#seeker-control-panel label { pointer-events: none; margin:1px 2px; color: #999; filter: contrast(0.6);} #seeker-control-panel input { vertical-align: middle; margin:1px; }' +
             '#seeker-control-panel label.danmaku-lost, #seeker-control-panel label.live-on, #seeker-control-panel label.video-error, #seeker-control-panel label.reload { color: orange!important; filter: none; }</style>'
@@ -1102,26 +1098,6 @@
         expiredPlayurlChecker();
     }, 180 * 1000);
 
-    waitForQuery('#head-info-vm .lower-row .right-ctnr', node => {
-        const getBottom = (e) => { const rect = e.getBoundingClientRect(); return rect.y + rect.height; }
-        const getTop = (e) => { const rect = e.getBoundingClientRect(); return rect.y }
-        const observer = new ResizeObserver((entries) => {
-            if (node.children.length <= 1) return;
-            if (getTop(node.children[node.children.length - 1]) >= getBottom(node.children[0])) {
-                node.style.marginTop = '-20px';
-                node.style.alignItems = 'flex-end';
-                waitForQuery('#playback-rate-username', node => { node.style.display = 'none'; }, 100);
-                waitForQuery('#playback-rate-title', node => { node.style.display = ''; node.parentElement.style.paddingBottom = '16px'; }, 100);
-            } else {
-                node.style.marginTop = '';
-                node.style.alignItems = '';
-                waitForQuery('#playback-rate-username', node => { node.style.display = ''; }, 100);
-                waitForQuery('#playback-rate-title', node => { node.style.display = 'none'; node.parentElement.style.paddingBottom = ''; }, 100);
-            }
-        });
-        observer.observe(node);
-    }, 180 * 1000);
-
     // ----------------------- 显示折叠UI -----------------------
 
 
@@ -1129,25 +1105,24 @@
         if (getStoredBoolean('hide-seeker-control-panel')) {
             waitForQuery('#seeker-control-panel', node => { node.style.display = 'none'; });
             waitForQuery('#control-panel-showhide span', node => { node.innerText = '显示追帧'; });
-            waitForQuery('#head-info-vm .right-section', node => { node.style.justifyContent = ''; }, 15000);
         } else {
             waitForQuery('#seeker-control-panel', node => { node.style.display = ''; });
             waitForQuery('#control-panel-showhide span', node => { node.innerText = '隐藏追帧'; });
-            waitForQuery('#head-info-vm .right-section', node => { node.style.justifyContent = 'center'; }, 15000);
         }
     }
 
-    waitForQuery('#head-info-vm .right-fixed-modules', node => {
-        const e = document.createElement("div");
-        e.id = 'control-panel-showhide';
-        e.className = "icon-ctnr live-skin-normal-a-text pointer";
-        e.innerHTML = '<i class="v-middle icon-font icon-danmu-a" style="font-size: 13px;"></i><span class="action-text v-middle" style="margin-left: 4px;"></span>';
+    waitForQuery('#head-info-vm .header-right .more-setting', node => {
+        const e = document.createElement('span');
+        const scope = parseStyleScope(node.querySelector('.more-entry.live-skin-normal-a-text'));
+        e.innerHTML = `<div ${scope} id="control-panel-showhide" class="more-entry live-skin-normal-a-text pointer">
+            <i ${scope} class="v-middle icon-font icon-danmu-a" style="height: 18px; opacity: 0.6; transform: translateY(2px);"></i>
+            <span ${scope} class="more-text v-middle"></span></div>`;
         e.onclick = () => {
             setStoredValue('hide-seeker-control-panel', !getStoredBoolean('hide-seeker-control-panel'));
             updatePanelHideState();
         }
         node.insertBefore(e, node.children[0]);
-        node.style.cssText = 'flex-direction: column; gap: 0px';
+        node.style.cssText = 'display: flex; flex-direction: row; gap: 3px';
         updatePanelHideState();
     }, 180 * 1000);
 
